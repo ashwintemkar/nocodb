@@ -1,7 +1,7 @@
 <script lang="ts" setup>
 import { useMagicKeys, whenever } from '@vueuse/core'
 import { commandScore } from './command-score'
-import type { CommandPaletteType } from '~/lib/types'
+import type { CommandPaletteType } from '#imports'
 
 interface CmdAction {
   id: string
@@ -10,7 +10,8 @@ interface CmdAction {
   parent?: string
   handler?: Function
   scopePayload?: any
-  icon?: VNode | string
+  icon?: VNode | string | Record<string, any>
+  iconType?: string
   keywords?: string[]
   section?: string
   is_default?: number | null
@@ -85,6 +86,7 @@ const nestedScope = computed(() => {
       id: parent,
       label: parentEl?.title,
       icon: parentEl?.icon,
+      iconType: parentEl?.iconType,
       iconColor: parent.startsWith('ws-') ? parentEl?.iconColor : null,
     })
     parent = parentEl?.parent || 'root'
@@ -260,9 +262,8 @@ const setScope = (scope: string) => {
 const show = () => {
   if (!user.value) return
   if (props.scope === 'disabled') return
-  if (!vOpen.value) {
-    loadScope()
-  }
+
+  loadScope()
 
   vOpen.value = true
   cmdInput.value = ''
@@ -307,14 +308,6 @@ watch(cmdInput, () => {
   } else {
     updateDebouncedInput()
   }
-})
-
-whenever(keys.ctrl_k, () => {
-  show()
-})
-
-whenever(keys.meta_k, () => {
-  show()
 })
 
 whenever(keys.Escape, () => {
@@ -396,7 +389,7 @@ defineExpose({
 <template>
   <div v-show="vOpen" class="cmdk-modal" :class="{ 'cmdk-modal-active': vOpen }">
     <div ref="modalEl" class="cmdk-modal-content h-[25.25rem]">
-      <div class="cmdk-header">
+      <div class="cmdk-header border-b-1 border-gray-200">
         <div class="cmdk-input-wrapper">
           <GeneralIcon class="h-4 w-4 text-gray-500" icon="search" />
           <div
@@ -414,13 +407,15 @@ defineExpose({
                 <GeneralWorkspaceIcon
                   v-if="el.icon && el.id.startsWith('ws')"
                   :workspace="{
+                    title: el.label,
                     id: el.id.split('-')[1],
                     meta: {
                       color: el.iconColor,
+                      icon: el.icon,
+                      iconType: el.iconType,
                     },
                   }"
-                  hide-label
-                  size="small"
+                  size="medium"
                 />
 
                 <component
@@ -442,7 +437,7 @@ defineExpose({
                   class="text-ellipsis truncate capitalize max-w-16"
                   style="word-break: keep-all; white-space: nowrap; display: inline"
                 >
-                  <NcTooltip show-on-truncate-only>
+                  <NcTooltip show-on-truncate-only class="truncate" :tooltip-style="{ zIndex: 1100 }">
                     <template #title>
                       {{ el.label }}
                     </template>
@@ -466,11 +461,11 @@ defineExpose({
           </div>
           <div v-else-if="searchedActionList.length === 0">
             <div class="cmdk-action">
-              <div class="cmdk-action-content">No action found.</div>
+              <div class="cmdk-action-content">{{ $t('placeholder.noResultsFoundForYourSearch') }}</div>
             </div>
           </div>
           <template v-else>
-            <div class="cmdk-action-list border-t-1 border-gray-200">
+            <div class="cmdk-action-list">
               <div v-bind="containerProps" :style="`height: ${WRAPPER_HEIGHT}px`">
                 <div v-bind="wrapperProps">
                   <div v-for="item in list" :key="item.index" :style="`height: ${ACTION_HEIGHT}px`">
@@ -501,13 +496,16 @@ defineExpose({
                           <GeneralWorkspaceIcon
                             v-if="item.data.icon && item.data.id.startsWith('ws')"
                             :workspace="{
+                              title: item.data.title,
                               id: item.data.id.split('-')[2],
                               meta: {
                                 color: item.data?.iconColor,
+                                icon: item.data?.icon,
+                                iconType: item.data?.iconType,
                               },
                             }"
                             class="mr-2"
-                            size="small"
+                            size="medium"
                           />
                           <template v-else-if="item.data.section === 'Bases' || item.data.icon === 'project'">
                             <GeneralBaseIconColorPicker
@@ -535,7 +533,7 @@ defineExpose({
                               <LazyGeneralEmojiPicker class="!text-sm !h-4 !w-4" size="small" :emoji="item.data.icon" readonly />
                             </div>
                           </template>
-                          <a-tooltip overlay-class-name="!px-2 !py-1 !rounded-lg">
+                          <a-tooltip overlay-class-name="!px-2 !py-1 !rounded-lg" :tooltip-style="{ zIndex: 1100 }">
                             <template #title>
                               {{ item.data.title }}
                             </template>
@@ -588,7 +586,7 @@ defineExpose({
   width: 100%;
   height: 100%;
   background-color: rgba(255, 255, 255, 0.5);
-  z-index: 1000;
+  z-index: 1100;
 
   color: rgb(60, 65, 73);
   font-size: 16px;
@@ -691,7 +689,7 @@ defineExpose({
       &.selected {
         cursor: pointer;
         background-color: #f4f4f5;
-        border-left: 4px solid var(--ant-primary-color);
+        border-left: 4px solid #3366ff;
         outline: none;
 
         .cmdk-keyboard {
@@ -736,7 +734,7 @@ defineExpose({
     border-top: 1px solid rgb(230, 230, 230);
     background: rgba(242, 242, 242, 0.4);
     font-size: 0.8em;
-    padding: 0.3em 0.6em;
+    padding: 0 0.6em;
     color: var(--cmdk-secondary-text-color);
     .cmdk-footer-left {
       display: flex;

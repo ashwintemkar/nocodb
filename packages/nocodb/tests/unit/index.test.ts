@@ -1,12 +1,16 @@
 import 'mocha';
+import dotenv from 'dotenv';
 import restTests from './rest/index.test';
 import modelTests from './model/index.test';
+import { formulaTests } from './formula/index.test';
 import TestDbMngr from './TestDbMngr';
-import dotenv from 'dotenv';
+import { dataApiV3Test } from './rest/tests/dataApiV3/index.test';
+import { processorTests } from './processor/index.test';
+import { errorTests } from './error/index.test';
 
 process.env.NODE_ENV = 'test';
 process.env.TEST = 'true';
-process.env.NC_DISABLE_CACHE = 'true';
+// process.env.NC_DISABLE_CACHE = 'true';
 process.env.NC_DISABLE_TELE = 'true';
 
 // Load environment variables from .env file
@@ -18,7 +22,11 @@ dotenv.config({
   await TestDbMngr.init();
 
   modelTests();
+  formulaTests();
+  errorTests();
   restTests();
+  processorTests();
+  await dataApiV3Test();
 
   run();
 })();

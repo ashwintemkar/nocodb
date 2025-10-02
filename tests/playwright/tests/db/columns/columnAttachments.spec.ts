@@ -14,18 +14,18 @@ test.describe('Attachment column', () => {
     await unsetup(context);
   });
 
-  test('Create and verify attachment column, verify it in shared form,', async ({ context }) => {
+  test('Create and verify attachment column, verify it in shared form,', async ({ context: _context }) => {
     // run tests slowly
     test.slow();
 
-    await dashboard.treeView.openTable({ title: 'Country' });
+    await dashboard.treeView.openTable({ title: 'Country', baseTitle: context.base.title });
     await dashboard.grid.column.create({
       title: 'testAttach',
       type: 'Attachment',
     });
 
     for (let i = 12; i >= 8; i -= 2) {
-      const filepath = [`${process.cwd()}/fixtures/sampleFiles/${i / 2}.json`];
+      const filepath = [`${__dirname}/../../../fixtures/sampleFiles/${i / 2}.json`];
       await dashboard.grid.cell.attachment.addFile({
         index: i,
         columnHeader: 'testAttach',
@@ -42,7 +42,7 @@ test.describe('Attachment column', () => {
     await dashboard.grid.cell.attachment.addFile({
       index: 4,
       columnHeader: 'testAttach',
-      filePath: [`${process.cwd()}/fixtures/sampleFiles/sampleImage.jpeg`],
+      filePath: [`${__dirname}/../../../fixtures/sampleFiles/sampleImage.jpeg`],
     });
 
     await dashboard.rootPage.waitForTimeout(1000);
@@ -60,10 +60,10 @@ test.describe('Attachment column', () => {
     });
     await dashboard.rootPage.waitForTimeout(500);
     const sharedFormUrl = await dashboard.form.topbar.getSharedViewUrl();
-    await dashboard.treeView.openTable({ title: 'Country' });
+    await dashboard.treeView.openTable({ title: 'Country', baseTitle: context.base.title });
 
     // Verify attachment in shared form
-    const newPage = await context.newPage();
+    const newPage = await _context.newPage();
     await newPage.goto(sharedFormUrl);
     const sharedForm = new SharedFormPage(newPage);
 
@@ -77,7 +77,7 @@ test.describe('Attachment column', () => {
     await sharedForm.rootPage.waitForTimeout(500);
     await sharedForm.cell.attachment.addFile({
       columnHeader: 'testAttach',
-      filePath: [`${process.cwd()}/fixtures/sampleFiles/1.json`],
+      filePath: [`${__dirname}/../../../fixtures/sampleFiles/1.json`],
       skipElemClick: true,
     });
 
@@ -98,7 +98,7 @@ test.describe('Attachment column', () => {
     await dashboard.grid.toolbar.actions.click('Download');
 
     const csvFileData: string = await dashboard.downloadAndGetFile({
-      downloadUIAction: dashboard.grid.toolbar.actions.clickDownloadSubmenu('Download CSV'),
+      downloadUIAction: dashboard.grid.toolbar.actions.clickDownloadSubmenu('CSV'),
     });
     const csvArray = csvFileData.split('\r\n');
     const columns = csvArray[0];

@@ -141,12 +141,13 @@ export class FieldsPage extends BasePage {
         break;
       case 'Date':
         await this.addOrEditColumn.locator('.nc-date-select').click();
-        await this.rootPage.locator('.nc-date-select').pressSequentially(dateFormat);
+        await this.addOrEditColumn.locator('.nc-date-select').pressSequentially(dateFormat);
         await this.rootPage.locator('.ant-select-item').locator(`text="${dateFormat}"`).click();
         break;
       case 'DateTime':
         // Date Format
         await this.addOrEditColumn.locator('.nc-date-select').click();
+        await this.addOrEditColumn.locator('.nc-date-select').pressSequentially(dateFormat);
         await this.rootPage.locator('.ant-select-item').locator(`text="${dateFormat}"`).click();
         // Time Format
         await this.addOrEditColumn.locator('.nc-time-select').click();
@@ -353,7 +354,7 @@ export class FieldsPage extends BasePage {
       : this.rootPage.locator('.nc-field-item-action-dropdown');
 
     await fieldActionDropdown.waitFor({ state: 'visible' });
-    const fieldId = await fieldActionDropdown.getByTestId('nc-field-item-id').textContent();
+    const fieldId = await fieldActionDropdown.getByTestId('nc-field-item-action-copy-id').innerText();
     await field.getByTestId('nc-field-item-action-button').click();
     await fieldActionDropdown.waitFor({ state: 'hidden' });
 

@@ -3,7 +3,11 @@ import { UITypes, isSystemColumn } from 'nocodb-sdk'
 import type { SidebarTableNode } from '~/lib/types'
 import { generateUniqueTitle as generateTitle } from '#imports'
 
-export function useTableNew(param: { onTableCreate?: (tableMeta: TableType) => void; baseId: string; sourceId?: string }) {
+export function useTableNew(param: {
+  onTableCreate?: (tableMeta: TableType) => void
+  baseId: string
+  sourceId?: ComputedRef<string | undefined>
+}) {
   const table = reactive<{ title: string; table_name: string; description?: string; columns: string[]; is_hybrid: boolean }>({
     title: '',
     table_name: '',
@@ -17,8 +21,6 @@ export function useTableNew(param: { onTableCreate?: (tableMeta: TableType) => v
   const { $e, $api } = useNuxtApp()
 
   const { getMeta, removeMeta } = useMetas()
-
-  const { closeTab } = useTabs()
 
   const { refreshCommandPalette } = useCommandPalette()
 
@@ -35,7 +37,7 @@ export function useTableNew(param: { onTableCreate?: (tableMeta: TableType) => v
 
   const { loadTables, baseUrl, isXcdbBase } = useBase()
 
-  const { loadViews } = useViewsStore()
+  const { loadViews, getViewReadableUrlSlug } = useViewsStore()
 
   const { openedViewsTab, viewsByTable } = storeToRefs(useViewsStore())
 
@@ -44,7 +46,7 @@ export function useTableNew(param: { onTableCreate?: (tableMeta: TableType) => v
   const tables = computed(() => baseTables.value.get(param.baseId) || [])
   const base = computed(() => bases.value.get(param.baseId))
 
-  const openTable = async (table: SidebarTableNode, cmdOrCtrl: boolean = false, navigate: boolean = true) => {
+  const openTable = async (table: SidebarTableNode, cmdOrCtrl = false, navigate = true) => {
     if (!table.base_id) return
 
     let base = bases.value.get(table.base_id)
@@ -70,8 +72,20 @@ export function useTableNew(param: { onTableCreate?: (tableMeta: TableType) => v
 
     const navigateToTable = async () => {
       if (navigate && openedViewsTab.value === 'view') {
+        let defaultView = table?.views?.[0]
+
+        if (!defaultView) {
+          const views = viewsByTable.value.get(table.id as string) ?? []
+
+          defaultView = views.find((v) => v.is_default) || views[0]
+        }
+
+        const slug = defaultView ? getViewReadableUrlSlug({ tableTitle: table.title, viewOrViewTitle: defaultView }) : ''
+
         await navigateTo(
-          `${cmdOrCtrl ? '#' : ''}/${workspaceIdOrType}/${baseIdOrBaseId}/${table?.id}`,
+          `${cmdOrCtrl ? '#' : ''}/${workspaceIdOrType}/${baseIdOrBaseId}/${table?.id}${
+            slug ? `/${defaultView!.id}/${slug}` : ''
+          }`,
           cmdOrCtrl
             ? {
                 open: navigateToBlankTargetOpenOption,
@@ -91,9 +105,9 @@ export function useTableNew(param: { onTableCreate?: (tableMeta: TableType) => v
           const defaultView = views.find((v) => v.is_default) || views[0]
 
           await navigateTo(
-            `${cmdOrCtrl ? '#' : ''}/${workspaceIdOrType}/${baseIdOrBaseId}/${table?.id}/${defaultView.id}/${
-              openedViewsTab.value
-            }`,
+            `${cmdOrCtrl ? '#' : ''}/${workspaceIdOrType}/${baseIdOrBaseId}/${table?.id}/${
+              defaultView.id
+            }/${getViewReadableUrlSlug({ tableTitle: table.title, viewOrViewTitle: defaultView })}}/${openedViewsTab.value}`,
             cmdOrCtrl
               ? {
                   open: navigateToBlankTargetOpenOption,
@@ -133,7 +147,7 @@ export function useTableNew(param: { onTableCreate?: (tableMeta: TableType) => v
       table.title = table.title.trim()
     }
 
-    let { sourceId } = param
+    let sourceId = unref(param.sourceId)
 
     if (!(baseId in bases.value)) {
       await basesStore.loadProject(baseId)
@@ -192,7 +206,7 @@ export function useTableNew(param: { onTableCreate?: (tableMeta: TableType) => v
   )
 
   const generateUniqueTitle = () => {
-    table.title = generateTitle('Table', tables.value, 'title')
+    table.title = generateTitle(t('objects.table'), tables.value, 'title')
   }
 
   const deleteTable = (table: TableType) => {
@@ -230,12 +244,6 @@ export function useTableNew(param: { onTableCreate?: (tableMeta: TableType) => v
           }
 
           await $api.dbTable.delete(table?.id as string)
-
-          await closeTab({
-            type: TabType.TABLE,
-            id: table.id,
-            title: table.title,
-          })
 
           await loadTables()
 

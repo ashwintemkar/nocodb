@@ -1,7 +1,7 @@
 import { type ColumnType } from 'nocodb-sdk'
 import type { PropType } from '@vue/runtime-core'
 
-const renderIcon = (column: ColumnType, abstractType: any) => {
+export const renderIcon = (column: ColumnType, abstractType: any) => {
   if (isPrimaryKey(column)) {
     return iconMap.cellSystemKey
   } else if (isSpecificDBType(column)) {
@@ -13,13 +13,15 @@ const renderIcon = (column: ColumnType, abstractType: any) => {
   } else if (isDateTime(column, abstractType)) {
     return iconMap.cellDatetime
   } else if (isGeoData(column)) {
-    return iconMap.geoData
+    return iconMap.ncMapPin
   } else if (isSet(column)) {
     return iconMap.cellMultiSelect
   } else if (isSingleSelect(column)) {
     return iconMap.cellSingleSelect
   } else if (isBoolean(column, abstractType)) {
     return iconMap.cellCheckbox
+  } else if (isAI(column)) {
+    return iconMap.cellAi
   } else if (isTextArea(column)) {
     return iconMap.cellLongText
   } else if (isEmail(column)) {
@@ -68,9 +70,16 @@ export default defineComponent({
       type: Object as PropType<ColumnType>,
       required: false,
     },
+    /**
+     * Windicss color class
+     */
+    color: {
+      type: String,
+      required: false,
+    },
   },
   setup(props) {
-    const columnMeta = toRef(props, 'columnMeta')
+    const { columnMeta, color: defaultColor } = toRefs(props)
 
     const injectedColumn = inject(ColumnInj, columnMeta)
 
@@ -88,7 +97,7 @@ export default defineComponent({
       if (!column.value && !columnMeta.value) return null
 
       return h(renderIcon((columnMeta.value ?? column.value)!, abstractType.value), {
-        class: 'text-inherit mx-1 nc-cell-icon',
+        class: `${defaultColor.value || 'text-inherit'} mx-1 flex-none nc-cell-icon`,
       })
     }
   },

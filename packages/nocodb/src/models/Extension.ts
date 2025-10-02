@@ -1,3 +1,4 @@
+import { PlanLimitTypes } from 'nocodb-sdk';
 import type { NcContext } from '~/interface/config';
 import { prepareForDb, prepareForResponse } from '~/utils/modelUtils';
 import Noco from '~/Noco';
@@ -75,7 +76,7 @@ export default class Extension {
         extensionList = extensionList.map((extension) =>
           prepareForResponse(extension, ['kv_store', 'meta']),
         );
-        NocoCache.setList(CacheScope.EXTENSION, [baseId], extensionList);
+        await NocoCache.setList(CacheScope.EXTENSION, [baseId], extensionList);
       }
     }
 
@@ -111,6 +112,12 @@ export default class Extension {
       context.base_id,
       MetaTable.EXTENSIONS,
       prepareForDb(insertObj, ['kv_store', 'meta']),
+    );
+
+    await NocoCache.incrHashField(
+      `${CacheScope.RESOURCE_STATS}:workspace:${context.workspace_id}`,
+      PlanLimitTypes.LIMIT_EXTENSION_PER_WORKSPACE,
+      1,
     );
 
     return this.get(context, id, ncMeta).then(async (res) => {
@@ -172,6 +179,33 @@ export default class Extension {
       CacheDelDirection.CHILD_TO_PARENT,
     );
 
+    await NocoCache.incrHashField(
+      `${CacheScope.RESOURCE_STATS}:workspace:${context.workspace_id}`,
+      PlanLimitTypes.LIMIT_EXTENSION_PER_WORKSPACE,
+      -1,
+    );
+
     return res;
+  }
+
+  static async deleteByBaseId(
+    context: NcContext,
+    baseId: string,
+    ncMeta = Noco.ncMeta,
+  ) {
+    await ncMeta.metaDelete(
+      context.workspace_id,
+      context.base_id,
+      MetaTable.EXTENSIONS,
+      {
+        base_id: baseId,
+      },
+    );
+
+    // clear cache
+    await NocoCache.deepDel(
+      `${CacheScope.EXTENSION}:${baseId}:list`,
+      CacheDelDirection.PARENT_TO_CHILD,
+    );
   }
 }

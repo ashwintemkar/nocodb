@@ -16,6 +16,7 @@ import { extractProps } from '~/helpers/extractProps';
 import { parseMetaProp } from '~/utils/modelUtils';
 import { NcError } from '~/helpers/catchError';
 import { cleanCommandPaletteCacheForUser } from '~/helpers/commandPaletteHelpers';
+import { MCPToken } from '~/models/index';
 
 const logger = new Logger('BaseUser');
 
@@ -133,7 +134,7 @@ export default class BaseUser {
     baseId: string,
     userId: string,
     ncMeta = Noco.ncMeta,
-  ): Promise<BaseUser & { is_mapped?: boolean }> {
+  ): Promise<BaseUser & { is_mapped?: boolean; deleted?: boolean }> {
     let baseUser =
       baseId &&
       userId &&
@@ -151,6 +152,7 @@ export default class BaseUser {
           `${MetaTable.USERS}.invite_token`,
           `${MetaTable.USERS}.roles as main_roles`,
           `${MetaTable.USERS}.created_at as created_at`,
+          `${MetaTable.USERS}.meta`,
           `${MetaTable.PROJECT_USERS}.base_id`,
           `${MetaTable.PROJECT_USERS}.roles as roles`,
         );
@@ -172,6 +174,8 @@ export default class BaseUser {
       baseUser = await queryBuilder.first();
 
       if (baseUser) {
+        baseUser.meta = parseMetaProp(baseUser);
+
         await NocoCache.set(
           `${CacheScope.BASE_USER}:${baseId}:${userId}`,
           baseUser,
@@ -193,22 +197,29 @@ export default class BaseUser {
     {
       base_id,
       mode = 'full',
+      strict_in_record = false,
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
       include_ws_deleted = true,
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      include_internal_user = false,
+      user_ids,
     }: {
       base_id: string;
       mode?: 'full' | 'viewer';
+      strict_in_record?: boolean;
       include_ws_deleted?: boolean;
+      include_internal_user?: boolean;
+      user_ids?: string[];
     },
     ncMeta = Noco.ncMeta,
-  ): Promise<(Partial<User> & BaseUser)[]> {
+  ): Promise<(Partial<User> & BaseUser & { deleted?: boolean })[]> {
     const cachedList = await NocoCache.getList(CacheScope.BASE_USER, [base_id]);
     let { list: baseUsers } = cachedList;
     const { isNoneList } = cachedList;
 
     const fullVersionCols = ['invite_token'];
 
-    if (!isNoneList && !baseUsers.length) {
+    if (strict_in_record || (!isNoneList && !baseUsers.length)) {
       const queryBuilder = ncMeta
         .knex(MetaTable.USERS)
         .select(
@@ -218,11 +229,13 @@ export default class BaseUser {
           `${MetaTable.USERS}.invite_token`,
           `${MetaTable.USERS}.roles as main_roles`,
           `${MetaTable.USERS}.created_at as created_at`,
+          `${MetaTable.USERS}.meta`,
           `${MetaTable.PROJECT_USERS}.base_id`,
           `${MetaTable.PROJECT_USERS}.roles as roles`,
         );
 
-      queryBuilder.leftJoin(MetaTable.PROJECT_USERS, function () {
+      const joinClause = strict_in_record ? 'innerJoin' : 'leftJoin';
+      queryBuilder[joinClause](MetaTable.PROJECT_USERS, function () {
         this.on(
           `${MetaTable.PROJECT_USERS}.fk_user_id`,
           '=',
@@ -237,14 +250,24 @@ export default class BaseUser {
       baseUsers = await queryBuilder;
 
       baseUsers = baseUsers.map((baseUser) => {
-        baseUser.base_id = base_id;
+        if (baseUser) {
+          baseUser.base_id = base_id;
+          baseUser.meta = parseMetaProp(baseUser);
+        }
+
         return this.castType(baseUser);
       });
 
-      await NocoCache.setList(CacheScope.BASE_USER, [base_id], baseUsers, [
-        'base_id',
-        'id',
-      ]);
+      if (!strict_in_record) {
+        await NocoCache.setList(CacheScope.BASE_USER, [base_id], baseUsers, [
+          'base_id',
+          'id',
+        ]);
+      }
+    }
+
+    if (user_ids) {
+      baseUsers = baseUsers.filter((u) => user_ids.includes(u.id));
     }
 
     if (mode === 'full') {
@@ -381,6 +404,7 @@ export default class BaseUser {
       logger.error('Error cleaning command palette cache');
     });
 
+    await MCPToken.bulkDelete({ fk_user_id: userId }, ncMeta);
     return response;
   }
 
@@ -409,6 +433,7 @@ export default class BaseUser {
       .select(`${MetaTable.PROJECT}.status`)
       .select(`${MetaTable.PROJECT}.description`)
       .select(`${MetaTable.PROJECT}.meta`)
+      .select(`${MetaTable.PROJECT}.order`)
       .select(`${MetaTable.PROJECT}.color`)
       .select(`${MetaTable.PROJECT}.is_meta`)
       .select(`${MetaTable.PROJECT}.created_at`)
@@ -509,6 +534,9 @@ export default class BaseUser {
         base_id: baseId,
         fk_user_id: userId,
         invited_by: baseUser.invited_by,
+        starred: baseUser.starred,
+        order: baseUser.order,
+        hidden: baseUser.hidden,
       });
     }
   }

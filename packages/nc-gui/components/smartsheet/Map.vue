@@ -14,6 +14,8 @@ const router = useRouter()
 
 const reloadViewDataHook = inject(ReloadViewDataHookInj)
 
+const { withLoading } = useLoadingTrigger()
+
 const reloadViewMetaHook = inject(ReloadViewMetaHookInj)
 
 const { formattedData, loadMapData, loadMapMeta, mapMetaData, geoDataFieldColumn, addEmptyRow, paginationData } =
@@ -170,9 +172,11 @@ reloadViewMetaHook?.on(async () => {
   await loadMapMeta()
 })
 
-reloadViewDataHook?.on(async () => {
-  await loadMapData()
-})
+reloadViewDataHook?.on(
+  withLoading(async () => {
+    await loadMapData()
+  }),
+)
 
 provide(ReloadRowDataHookInj, reloadViewDataHook!)
 
@@ -217,7 +221,7 @@ const count = computed(() => paginationData.value.totalRows)
   </a-modal>
 
   <div class="flex flex-col h-full w-full no-underline" data-testid="nc-map-wrapper">
-    <div id="mapContainer" ref="mapContainerRef" class="w-full h-screen">
+    <div id="mapContainer" ref="mapContainerRef" class="w-full nc-h-screen">
       <a-tooltip placement="bottom" class="h-2 w-auto max-w-fit-content absolute top-3 right-3 p-2 z-500 cursor-default">
         <template #title>
           <span v-if="count > 1000"> {{ $t('msg.info.map.overLimit') }} </span>

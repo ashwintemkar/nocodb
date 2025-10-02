@@ -1,11 +1,17 @@
-import { message } from 'ant-design-vue'
 import type { WatchStopHandle } from 'vue'
 import type { TableType } from 'nocodb-sdk'
 
 export const useMetas = createSharedComposable(() => {
   const { $api } = useNuxtApp()
 
+  const { ncNavigateTo } = useGlobal()
+
   const { tables: _tables } = storeToRefs(useBase())
+
+  const { activeProjectId } = storeToRefs(useBases())
+
+  const { activeWorkspaceId } = storeToRefs(useWorkspace())
+
   const { baseTables } = storeToRefs(useTablesStore())
 
   const metas = useState<{ [idOrTitle: string]: TableType | any }>('metas', () => ({}))
@@ -31,6 +37,8 @@ export const useMetas = createSharedComposable(() => {
     force = false,
     skipIfCacheMiss = false,
     baseId?: string,
+    disableError = false,
+    navigateOnNotFound = false,
   ): Promise<TableType | null> => {
     if (!tableIdOrTitle) return null
 
@@ -91,7 +99,16 @@ export const useMetas = createSharedComposable(() => {
 
       return model
     } catch (e: any) {
-      message.error(await extractSdkResponseErrorMsg(e))
+      if (!disableError) {
+        message.error(await extractSdkResponseErrorMsg(e))
+      }
+
+      if (navigateOnNotFound) {
+        ncNavigateTo({
+          workspaceId: activeWorkspaceId.value,
+          baseId: activeProjectId.value,
+        })
+      }
     } finally {
       delete loadingState.value[tableIdOrTitle]
     }
@@ -111,5 +128,29 @@ export const useMetas = createSharedComposable(() => {
     }
   }
 
-  return { getMeta, clearAllMeta, metas, metasWithIdAsKey, removeMeta, setMeta }
+  // return partial metadata for related table of a meta service
+  const getPartialMeta = async (linkColumnId: string, tableIdOrTitle: string): Promise<TableType | null> => {
+    if (!tableIdOrTitle || !linkColumnId) return null
+
+    if (metas.value[tableIdOrTitle]) {
+      return metas.value[tableIdOrTitle]
+    }
+
+    // wait until loading is finished if requesting same meta
+    await until(() => !loadingState.value[tableIdOrTitle]).toBeTruthy({
+      timeout: 5000,
+    })
+
+    try {
+      loadingState.value[tableIdOrTitle] = true
+      const model = await $api.dbLinks.tableRead(linkColumnId, tableIdOrTitle)
+      metas.value[tableIdOrTitle] = model
+      return model
+    } catch (e) {
+      message.error(await extractSdkResponseErrorMsg(e))
+    } finally {
+      loadingState.value[tableIdOrTitle] = false
+    }
+  }
+  return { getMeta, clearAllMeta, metas, metasWithIdAsKey, removeMeta, setMeta, getPartialMeta }
 })

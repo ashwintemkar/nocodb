@@ -3,7 +3,7 @@ const workspaceStore = useWorkspace()
 
 const { isLeftSidebarOpen } = storeToRefs(useSidebarStore())
 
-const { activeWorkspace, isWorkspaceLoading } = storeToRefs(workspaceStore)
+const { activeWorkspace, isWorkspacesLoading } = storeToRefs(workspaceStore)
 
 const { activeViewTitleOrId } = storeToRefs(useViewsStore())
 
@@ -20,8 +20,8 @@ const showSidebarBtn = computed(() => !(isMobileMode.value && !activeViewTitleOr
     :data-workspace-title="activeWorkspace?.title"
     style="height: var(--topbar-height)"
   >
-    <div v-if="!isWorkspaceLoading" class="flex flex-row items-center w-full">
-      <WorkspaceMenu />
+    <div v-if="!isWorkspacesLoading" class="flex flex-row items-center w-full">
+      <div>Bases</div>
 
       <div class="flex flex-grow min-w-1"></div>
 
@@ -41,7 +41,7 @@ const showSidebarBtn = computed(() => !(isMobileMode.value && !activeViewTitleOr
           v-e="['c:leftSidebar:hideToggle']"
           :type="isMobileMode ? 'secondary' : 'text'"
           :size="isMobileMode ? 'medium' : 'small'"
-          class="nc-sidebar-left-toggle-icon !text-gray-700 !hover:text-gray-800 !xs:(h-10.5 max-h-10.5 max-w-10.5) !md:(hover:bg-gray-200)"
+          class="nc-sidebar-left-toggle-icon !text-nc-content-gray-subtle !hover:text-nc-content-gray !xs:(h-10.5 max-h-10.5 max-w-10.5) !md:(hover:bg-nc-bg-gray-medium)"
           @click="isLeftSidebarOpen = !isLeftSidebarOpen"
         >
           <div class="flex items-center text-inherit">
@@ -49,7 +49,7 @@ const showSidebarBtn = computed(() => !(isMobileMode.value && !activeViewTitleOr
             <GeneralIcon
               v-else
               icon="doubleLeftArrow"
-              class="duration-150 transition-all !text-lg -mt-0.5 !text-gray-500/75"
+              class="duration-150 transition-all !text-lg -mt-0.5 !text-nc-content-gray-muted bg-opacity-50"
               :class="{
                 'transform rotate-180': !isLeftSidebarOpen,
               }"

@@ -3,7 +3,8 @@ import { APP_FILTER, APP_GUARD } from '@nestjs/core';
 // @ts-ignore
 import { ConfigModule } from '@nestjs/config';
 import { EventEmitterModule as NestJsEventEmitter } from '@nestjs/event-emitter';
-import { SentryModule } from '@ntegral/nestjs-sentry';
+import { SentryModule } from '@sentry/nestjs/setup';
+
 import type { MiddlewareConsumer } from '@nestjs/common';
 import { NocoModule } from '~/modules/noco.module';
 import { AuthModule } from '~/modules/auth/auth.module';
@@ -15,8 +16,10 @@ import { JobsModule } from '~/modules/jobs/jobs.module';
 
 import appConfig from '~/app.config';
 import { ExtractIdsMiddleware } from '~/middlewares/extract-ids/extract-ids.middleware';
+import { RawBodyMiddleware } from '~/middlewares/raw-body.middleware';
+import { JsonBodyMiddleware } from '~/middlewares/json-body.middleware';
 
-import { packageInfo } from '~/utils/packageVersion';
+import { UrlEncodeMiddleware } from '~/middlewares/url-encode.middleware';
 
 export const ceModuleConfig = {
   imports: [
@@ -29,17 +32,7 @@ export const ceModuleConfig = {
       load: [() => appConfig],
       isGlobal: true,
     }),
-    ...(process.env.NC_SENTRY_DSN
-      ? [
-          SentryModule.forRoot({
-            dsn: process.env.NC_SENTRY_DSN,
-            debug: false,
-            environment: process.env.NODE_ENV,
-            release: packageInfo.version, // must create a release in sentry.io dashboard
-            logLevels: ['debug'], //based on sentry.io loglevel //
-          }),
-        ]
-      : []),
+    ...(process.env.NC_SENTRY_DSN ? [SentryModule.forRoot()] : []),
   ],
   providers: [
     {
@@ -59,6 +52,15 @@ export class AppModule {
   configure(consumer: MiddlewareConsumer) {
     const dashboardPath = process.env.NC_DASHBOARD_URL ?? '/dashboard';
     consumer
+      .apply(RawBodyMiddleware)
+      .forRoutes({
+        path: '/api/payment/webhook',
+        method: RequestMethod.POST,
+      })
+      .apply(JsonBodyMiddleware)
+      .forRoutes('*')
+      .apply(UrlEncodeMiddleware)
+      .forRoutes('*')
       .apply(GuiMiddleware)
       .forRoutes({ path: `${dashboardPath}*`, method: RequestMethod.GET })
       .apply(GlobalMiddleware)

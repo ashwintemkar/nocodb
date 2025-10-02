@@ -1,4 +1,5 @@
 import {
+  type ButtonType,
   type ColumnType,
   CommonAggregations,
   type GridColumnReqType,
@@ -32,13 +33,17 @@ const [useProvideViewColumns, useViewColumns] = useInjectionState(
 
     const filterQuery = ref('')
 
-    const { $api, $e } = useNuxtApp()
+    const { $api, $e, $eventBus } = useNuxtApp()
+
+    const { t } = useI18n()
 
     const { isUIAllowed } = useRoles()
 
     const { isSharedBase } = storeToRefs(useBase())
 
-    const isViewColumnsLoading = ref(false)
+    const isViewColumnsLoading = ref(true)
+
+    const hidingViewColumnsMap = ref<Record<string, boolean>>({})
 
     const { addUndo, defineViewScope } = useUndoRedo()
 
@@ -68,67 +73,98 @@ const [useProvideViewColumns, useViewColumns] = useInjectionState(
     const gridViewCols = ref<Record<string, GridColumnType>>({})
 
     const loadViewColumns = async () => {
-      if (!meta || !view) return
+      if (!meta.value || !view.value?.id) return
 
       let order = 1
 
-      if (view.value?.id) {
-        const data = (isPublic ? meta.value?.columns : (await $api.dbViewColumn.list(view.value.id)).list) as any[]
+      const data = ((isPublic ? meta.value?.columns : (await $api.dbViewColumn.list(view.value.id)).list) as any[]) ?? []
 
-        const fieldById = data.reduce<Record<string, any>>((acc, curr) => {
-          curr.show = !!curr.show
+      const fieldById = data.reduce<Record<string, any>>((acc, curr) => {
+        // If hide column api is in progress and we try to load columns before that then we need to assign local visibility state
+        curr.show = hidingViewColumnsMap.value[curr.fk_column_id] && !!curr.show ? false : !!curr.show
+
+        return {
+          ...acc,
+          [curr.fk_column_id]: curr,
+        }
+      }, {})
+
+      fields.value = (meta.value?.columns || [])
+        .filter((column: ColumnType) => {
+          // filter created by and last modified by system columns
+          if (isHiddenCol(column, meta.value)) return false
+          return true
+        })
+        .map((column: ColumnType) => {
+          const currentColumnField = fieldById[column.id!] || {}
 
           return {
-            ...acc,
-            [curr.fk_column_id]: curr,
+            title: column.title,
+            fk_column_id: column.id,
+            ...currentColumnField,
+            show: currentColumnField.show || isColumnViewEssential(currentColumnField),
+            order: currentColumnField.order || order++,
+            aggregation: currentColumnField?.aggregation ?? CommonAggregations.None,
+            system: isSystemColumn(metaColumnById?.value?.[currentColumnField.fk_column_id!]),
+            isViewEssentialField: isColumnViewEssential(column),
+            initialShow:
+              currentColumnField.show ||
+              isColumnViewEssential(currentColumnField) ||
+              (currentColumnField as GridColumnType)?.group_by,
           }
-        }, {})
+        })
+        .sort((a: Field, b: Field) => a.order - b.order)
 
-        fields.value = meta.value?.columns
-          ?.filter((column: ColumnType) => {
-            // filter created by and last modified by system columns
-            if (isHiddenCol(column, meta.value)) return false
-            return true
-          })
-          .map((column: ColumnType) => {
-            const currentColumnField = fieldById[column.id!] || {}
-
-            return {
-              title: column.title,
-              fk_column_id: column.id,
-              ...currentColumnField,
-              show: currentColumnField.show || isColumnViewEssential(currentColumnField),
-              order: currentColumnField.order || order++,
-              aggregation: currentColumnField?.aggregation ?? CommonAggregations.None,
-              system: isSystemColumn(metaColumnById?.value?.[currentColumnField.fk_column_id!]),
-              isViewEssentialField: isColumnViewEssential(column),
-              initialShow:
-                currentColumnField.show ||
-                isColumnViewEssential(currentColumnField) ||
-                (currentColumnField as GridColumnType)?.group_by,
-            }
-          })
-          .sort((a: Field, b: Field) => a.order - b.order)
-
-        if (isLocalMode.value && fields.value) {
-          for (const key in localChanges.value) {
-            const fieldIndex = fields.value.findIndex((f) => f.fk_column_id === key)
-            if (fieldIndex !== undefined && fieldIndex > -1) {
-              fields.value[fieldIndex] = localChanges.value[key]
-              fields.value = fields.value.sort((a: Field, b: Field) => a.order - b.order)
-            }
+      if (isLocalMode.value && fields.value) {
+        for (const key in localChanges.value) {
+          const fieldIndex = fields.value.findIndex((f) => f.fk_column_id === key)
+          if (fieldIndex !== undefined && fieldIndex > -1) {
+            fields.value[fieldIndex] = localChanges.value[key]
+            fields.value = fields.value.sort((a: Field, b: Field) => a.order - b.order)
           }
         }
+      }
 
-        const colsData: GridColumnType[] = (isPublic.value ? view.value?.columns : fields.value) ?? []
+      const colsData: GridColumnType[] = (isPublic.value ? view.value?.columns : fields.value) ?? []
 
-        gridViewCols.value = colsData.reduce<Record<string, GridColumnType>>(
-          (o, col) => ({
-            ...o,
-            [col.fk_column_id as string]: col,
-          }),
-          {},
-        )
+      gridViewCols.value = colsData.reduce<Record<string, GridColumnType>>(
+        (o, col) => ({
+          ...o,
+          [col.fk_column_id as string]: col,
+        }),
+        {},
+      )
+    }
+
+    const updateDefaultViewColumnMeta = async (
+      columnId?: string,
+      colMeta: { defaultViewColOrder?: number; defaultViewColVisibility?: boolean } = {},
+      allFields = false,
+    ) => {
+      if (!meta.value?.columns) return
+
+      meta.value.columns = (meta.value.columns || []).map((c: ColumnType) => {
+        if (!allFields && c.id !== columnId) return c
+
+        if (allFields && c.pv) return c
+
+        c.meta = { ...parseProp(c.meta || {}), ...colMeta }
+        return c
+      })
+
+      if (!allFields && columnId && meta.value?.columnsById?.[columnId]) {
+        meta.value.columnsById[columnId].meta = {
+          ...parseProp(meta.value.columnsById[columnId].meta),
+          ...colMeta,
+        }
+      }
+
+      if (allFields) {
+        meta.value.columnsById = meta.value.columns.reduce((acc, c) => {
+          acc[c.id!] = c
+
+          return acc
+        }, {} as Record<string, ColumnType>)
       }
     }
 
@@ -173,6 +209,10 @@ const [useProvideViewColumns, useViewColumns] = useInjectionState(
           })
         } else {
           await $api.dbView.showAllColumn(view.value.id)
+        }
+
+        if (view.value?.is_default) {
+          updateDefaultViewColumnMeta(undefined, { defaultViewColVisibility: true }, true)
         }
       }
 
@@ -222,6 +262,10 @@ const [useProvideViewColumns, useViewColumns] = useInjectionState(
         } else {
           await $api.dbView.hideAllColumn(view.value.id)
         }
+
+        if (view.value?.is_default) {
+          updateDefaultViewColumnMeta(undefined, { defaultViewColVisibility: false }, true)
+        }
       }
 
       await loadViewColumns()
@@ -229,33 +273,7 @@ const [useProvideViewColumns, useViewColumns] = useInjectionState(
       $e('a:fields:show-all')
     }
 
-    const updateDefaultViewColumnOrder = (columnId: string, order: number) => {
-      if (!meta.value?.columns) return
-
-      const colIndex = meta.value.columns.findIndex((c) => c.id === columnId)
-      if (colIndex !== -1) {
-        meta.value.columns[colIndex].meta = {
-          ...parseProp((meta.value.columns[colIndex] as ColumnType)?.meta || {}),
-          defaultViewColOrder: order,
-        }
-        meta.value.columns = (meta.value.columns || []).map((c: ColumnType) => {
-          if (c.id !== columnId) return c
-
-          c.meta = { ...parseProp(c.meta || {}), defaultViewColOrder: order }
-          return c
-        })
-      }
-      if (meta.value?.columnsById?.[columnId]) {
-        meta.value.columnsById[columnId].meta = { ...parseProp(meta.value.columns[colIndex]?.meta), defaultViewColOrder: order }
-      }
-    }
-
-    const saveOrUpdate = async (
-      field: any,
-      index: number,
-      disableDataReload: boolean = false,
-      updateDefaultViewColOrder: boolean = false,
-    ) => {
+    const saveOrUpdate = async (field: any, index: number, disableDataReload = false, updateDefaultViewColMeta = false) => {
       if (isLocalMode.value && fields.value) {
         fields.value[index] = field
         meta.value!.columns = meta.value!.columns?.map((column: ColumnType) => {
@@ -272,13 +290,16 @@ const [useProvideViewColumns, useViewColumns] = useInjectionState(
         localChanges.value[field.fk_column_id] = field
       }
 
-      if (updateDefaultViewColOrder && field?.fk_column_id) {
-        updateDefaultViewColumnOrder(field.fk_column_id, field.order)
-      }
-
       if (isUIAllowed('viewFieldEdit')) {
         if (field.id && view?.value?.id) {
           await $api.dbViewColumn.update(view.value.id, field.id, field)
+
+          if (updateDefaultViewColMeta) {
+            updateDefaultViewColumnMeta(field.fk_column_id, {
+              defaultViewColOrder: field.order,
+              defaultViewColVisibility: field.show,
+            })
+          }
         } else if (view.value?.id) {
           const insertedField = (await $api.dbViewColumn.create(view.value.id, field)) as any
 
@@ -317,32 +338,82 @@ const [useProvideViewColumns, useViewColumns] = useInjectionState(
       },
     })
 
+    const fieldSearchBasisOptions: {
+      searchBasisInfo: string
+      filterCallback: (query: string, option: ColumnType) => boolean
+    }[] = [
+      {
+        searchBasisInfo: t('msg.info.matchedByButtonLabel'),
+        filterCallback: (query, option) => {
+          if (!option) return false
+
+          const column = option as ColumnType
+
+          return isButton(column) && searchCompare([(column.colOptions as ButtonType)?.label], query)
+        },
+      },
+      {
+        searchBasisInfo: t('msg.info.matchedByFieldDescription'),
+        filterCallback: (query, option) => {
+          if (!option) return false
+
+          const column = option as ColumnType
+
+          if (!column.description) return false
+
+          return searchCompare([column.description], query)
+        },
+      },
+    ]
+
+    const searchBasisIdMap = ref<Record<string, string>>({})
+
+    /**
+     * Apply search basis filter to the column
+     * @param column - The column to apply the search basis filter to
+     * @returns true if the column matches the search basis filter, false otherwise
+     */
+    const applySearchBasisFilter = (column?: ColumnType) => {
+      if (!column) return false
+
+      for (const basisOption of fieldSearchBasisOptions) {
+        if (!basisOption.filterCallback(filterQuery.value, column)) continue
+
+        searchBasisIdMap.value[column.id!] = basisOption.searchBasisInfo
+        return true
+      }
+
+      return false
+    }
+
     const filteredFieldList = computed(() => {
-      return (
-        fields.value?.filter((field: Field) => {
-          if (!field.initialShow && isLocalMode.value) {
-            return false
-          }
+      searchBasisIdMap.value = {}
 
-          if (
-            metaColumnById?.value?.[field.fk_column_id!]?.pv &&
-            (!filterQuery.value || field.title.toLowerCase().includes(filterQuery.value.toLowerCase()))
-          ) {
-            return true
-          }
+      return (fields.value || []).filter((field: Field) => {
+        if (!field.initialShow && isLocalMode.value) {
+          return false
+        }
+        const column = metaColumnById?.value?.[field.fk_column_id!]
 
-          // hide system columns if not enabled
-          if (!showSystemFields.value && isSystemColumn(metaColumnById?.value?.[field.fk_column_id!])) {
-            return false
-          }
+        if (column?.pv) {
+          // Step 1: Apply default filter
+          if (!filterQuery.value || searchCompare([field.title], filterQuery.value)) return true
 
-          if (filterQuery.value === '') {
-            return true
-          } else {
-            return field.title.toLowerCase().includes(filterQuery.value.toLowerCase())
-          }
-        }) || []
-      )
+          // Step 2: Apply search basis options if default filter fails
+          return applySearchBasisFilter(column)
+        }
+
+        // hide system columns if not enabled
+        if (!showSystemFields.value && isSystemColumn(column)) {
+          return false
+        }
+
+        // Step 1: Apply default filter
+        if (!filterQuery.value || searchCompare([field.title], filterQuery.value)) return true
+
+        // Step 2: Apply search basis options if default filter fails
+        return applySearchBasisFilter(column)
+      })
     })
 
     const numberOfHiddenFields = computed(() => {
@@ -393,20 +464,20 @@ const [useProvideViewColumns, useViewColumns] = useInjectionState(
         undo: {
           fn: (v: boolean) => {
             field.show = !v
-            saveOrUpdate(field, fieldIndex)
+            saveOrUpdate(field, fieldIndex, false, !!view.value?.is_default)
           },
           args: [checked],
         },
         redo: {
           fn: (v: boolean) => {
             field.show = v
-            saveOrUpdate(field, fieldIndex)
+            saveOrUpdate(field, fieldIndex, false, !!view.value?.is_default)
           },
           args: [checked],
         },
         scope: defineViewScope({ view: view.value }),
       })
-      saveOrUpdate(field, fieldIndex, !checked)
+      saveOrUpdate(field, fieldIndex, !checked, !!view.value?.is_default)
     }
 
     const toggleFieldStyles = (field: any, style: 'underline' | 'bold' | 'italic', status: boolean) => {
@@ -421,7 +492,14 @@ const [useProvideViewColumns, useViewColumns] = useInjectionState(
     // or when columns changes(delete/add)
     watch(
       [() => view?.value?.id, () => meta.value?.columns],
-      async ([newViewId]) => {
+      async ([newViewId], [oldViewId]) => {
+        // If we change view, we need to reset the hidingViewColumnsMap
+        if (oldViewId && oldViewId !== newViewId) {
+          hidingViewColumnsMap.value = {}
+        }
+
+        if (!ncIsEmptyArray(hidingViewColumnsMap.value) && Object.values(hidingViewColumnsMap.value).some((v) => v)) return
+
         // reload only if view belongs to current table
         if (newViewId && view.value?.fk_model_id === meta.value?.id) {
           isViewColumnsLoading.value = true
@@ -491,6 +569,48 @@ const [useProvideViewColumns, useViewColumns] = useInjectionState(
       { immediate: true },
     )
 
+    const evtListener = (evt: string, payload: any) => {
+      if (payload.fk_view_id !== view.value?.id) return
+
+      if (evt === 'view_column_update') {
+        const col = gridViewCols.value?.[payload.fk_column_id]
+        if (col) {
+          const reloadNeeded = payload?.group_by !== col?.group_by || (!col.show && payload?.show)
+
+          Object.assign(col, payload)
+
+          const field = fields.value?.find((f) => f.fk_column_id === payload.fk_column_id)
+          if (field) {
+            const currentColumnField = col || {}
+            Object.assign(field, {
+              show: currentColumnField.show || isColumnViewEssential(currentColumnField),
+              order: currentColumnField.order || order++,
+              aggregation: currentColumnField?.aggregation ?? CommonAggregations.None,
+            })
+
+            fields.value?.sort((a: Field, b: Field) => a.order - b.order)
+          }
+
+          if (reloadNeeded) {
+            nextTick(() => reloadData?.({ shouldShowLoading: false }))
+          }
+
+          $eventBus.smartsheetStoreEventBus.emit(SmartsheetStoreEvents.TRIGGER_RE_RENDER)
+        }
+      } else if (evt === 'view_column_refresh') {
+        loadViewColumns()
+        nextTick(() => reloadData?.({ shouldShowLoading: false }))
+      }
+    }
+
+    onMounted(() => {
+      $eventBus.realtimeViewMetaEventBus.on(evtListener)
+    })
+
+    onBeforeUnmount(() => {
+      $eventBus.realtimeViewMetaEventBus.off(evtListener)
+    })
+
     provide(FieldsInj, rootFields)
 
     return {
@@ -498,6 +618,7 @@ const [useProvideViewColumns, useViewColumns] = useInjectionState(
       fieldsMap,
       loadViewColumns,
       filteredFieldList,
+      searchBasisIdMap,
       numberOfHiddenFields,
       filterQuery,
       showAll,
@@ -513,6 +634,8 @@ const [useProvideViewColumns, useViewColumns] = useInjectionState(
       gridViewCols,
       resizingColOldWith,
       isLocalMode,
+      updateDefaultViewColumnMeta,
+      hidingViewColumnsMap,
     }
   },
   'useViewColumnsOrThrow',

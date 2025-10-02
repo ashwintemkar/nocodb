@@ -15,6 +15,7 @@ const props = withDefaults(
     allowClear?: boolean
     loading?: boolean
     suffixIcon?: keyof typeof iconMap
+    maxTagCount?: number
   }>(),
   {
     suffixIcon: 'arrowDown',
@@ -55,8 +56,9 @@ const onChange = (value: string) => {
     :mode="mode"
     :placeholder="placeholder"
     :show-search="showSearch"
+    :max-tag-count="maxTagCount"
     class="nc-select"
-    @change="onChange"
+    @change="onChange as any"
   >
     <template #suffixIcon>
       <GeneralLoader v-if="loading" />
@@ -74,9 +76,7 @@ const onChange = (value: string) => {
 .ant-select-item {
   @apply !xs:h-13 !min-h-[2.375rem] !p-2;
 }
-.ant-select-item-option-content {
-  @apply !xs:mt-2.5;
-}
+
 .ant-select-item-option-state {
   @apply !xs:mt-1.75;
 }
@@ -92,7 +92,7 @@ const onChange = (value: string) => {
   }
 
   .ant-select-selection-item {
-    @apply font-medium pr-3 rounded-md;
+    @apply font-medium pr-3 rounded-md flex items-center;
   }
 
   .ant-select-selection-placeholder {
@@ -111,7 +111,6 @@ const onChange = (value: string) => {
   }
 }
 .nc-select.ant-select-focused:not(.ant-select-disabled).ant-select:not(.ant-select-customize-input) .ant-select-selector {
-  box-shadow: none;
   @apply border-brand-500;
 }
 

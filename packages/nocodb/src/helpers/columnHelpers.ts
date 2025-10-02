@@ -1,15 +1,19 @@
 import { customAlphabet } from 'nanoid';
 import {
+  AppEvents,
   getAvailableRollupForUiType,
   RelationTypes,
   UITypes,
+  WebhookActions,
 } from 'nocodb-sdk';
 import { pluralize, singularize } from 'inflection';
+import { REGEXSTR_INTL_LETTER, REGEXSTR_NUMERIC_ARABIC } from 'nocodb-sdk';
 import type {
   BoolType,
   ColumnReqType,
   LinkToAnotherRecordType,
   LookupColumnReqType,
+  NcRequest,
   RollupColumnReqType,
   TableType,
 } from 'nocodb-sdk';
@@ -18,11 +22,13 @@ import type LookupColumn from '~/models/LookupColumn';
 import type Model from '~/models/Model';
 import type { NcContext } from '~/interface/config';
 import type { RollupColumn, View } from '~/models';
+import type { ColumnWebhookManager } from '~/utils/column-webhook-manager';
 import { GridViewColumn } from '~/models';
 import validateParams from '~/helpers/validateParams';
 import { getUniqueColumnAliasName } from '~/helpers/getUniqueName';
 import Column from '~/models/Column';
 import { DriverClient } from '~/utils/nc-config';
+import Noco from '~/Noco';
 
 export const randomID = customAlphabet(
   '1234567890abcdefghijklmnopqrstuvwxyz_',
@@ -31,6 +37,7 @@ export const randomID = customAlphabet(
 
 export async function createHmAndBtColumn(
   context: NcContext,
+  req: NcRequest,
   child: Model,
   parent: Model,
   childColumn: Column,
@@ -45,36 +52,71 @@ export async function createHmAndBtColumn(
   colExtra?: any,
   parentColumn?: Column,
   isCustom = false,
+  columnWebhookManager?: ColumnWebhookManager,
 ) {
+  let savedColumn: Column;
+  let crossBaseProps: {
+    fk_related_base_id?: string;
+    fk_related_source_id?: string;
+  } = {};
+
   // save bt column
   {
     const title = getUniqueColumnAliasName(
       await child.getColumns(context),
       (type === 'bt' && alias) || `${parent.title}`,
     );
-    await Column.insert<LinkToAnotherRecordColumn>(context, {
-      title,
 
-      fk_model_id: child.id,
-      // ref_db_alias
-      uidt: UITypes.LinkToAnotherRecord,
-      type: 'bt',
-      // db_type:
+    // if parent and child are from different base then set cross base props
+    if (parent.base_id !== child.base_id) {
+      crossBaseProps = {
+        fk_related_base_id: parent.base_id,
+        fk_related_source_id: parent.id,
+      };
+    }
 
-      fk_child_column_id: childColumn.id,
-      fk_parent_column_id: parentColumn?.id || parent.primaryKey.id,
-      fk_related_model_id: parent.id,
-      virtual,
-      // if self referencing treat it as system field to hide from ui
-      system: isSystemCol || parent.id === child.id,
-      fk_col_name: fkColName,
-      fk_index_name: fkColName,
-      ...(type === 'bt' ? colExtra : {}),
-      meta: {
-        ...(colExtra?.meta || {}),
-        custom: isCustom,
+    const childRelCol = await Column.insert<LinkToAnotherRecordColumn>(
+      { ...context, base_id: child.base_id },
+      {
+        title,
+
+        fk_model_id: child.id,
+        // ref_db_alias
+        uidt: UITypes.LinkToAnotherRecord,
+        type: 'bt',
+        // db_type:
+
+        fk_child_column_id: childColumn.id,
+        fk_parent_column_id: parentColumn?.id || parent.primaryKey.id,
+        fk_related_model_id: parent.id,
+
+        ...crossBaseProps,
+
+        virtual,
+        // if self referencing treat it as system field to hide from ui
+        system: isSystemCol || parent.id === child.id,
+        fk_col_name: fkColName,
+        fk_index_name: fkColName,
+        ...(type === 'bt' ? colExtra : {}),
+        meta: {
+          ...(colExtra?.meta || {}),
+          custom: isCustom,
+        },
       },
+    );
+    await columnWebhookManager?.addNewColumnById({
+      columnId: childRelCol.id,
+      action: WebhookActions.INSERT,
     });
+    if (!isSystemCol)
+      Noco.appHooksService.emit(AppEvents.COLUMN_CREATE, {
+        table: child,
+        column: childRelCol,
+        columnId: childRelCol.id,
+        req,
+        context,
+        columns: await child.getCachedColumns(context),
+      });
   }
   // save hm column
   {
@@ -89,23 +131,49 @@ export async function createHmAndBtColumn(
       custom: isCustom,
     };
 
-    await Column.insert(context, {
-      title,
-      fk_model_id: parent.id,
-      uidt: isLinks ? UITypes.Links : UITypes.LinkToAnotherRecord,
-      type: 'hm',
-      fk_target_view_id: childView?.id,
-      fk_child_column_id: childColumn.id,
-      fk_parent_column_id: parentColumn?.id || parent.primaryKey.id,
-      fk_related_model_id: child.id,
-      virtual,
-      system: isSystemCol,
-      fk_col_name: fkColName,
-      fk_index_name: fkColName,
-      meta,
-      ...(type === 'hm' ? colExtra : {}),
+    // if parent and child are from different base then set cross base props
+    if (parent.base_id !== child.base_id) {
+      crossBaseProps = {
+        fk_related_base_id: child.base_id,
+        fk_related_source_id: child.id,
+      };
+    }
+
+    savedColumn = await Column.insert(
+      { ...context, base_id: parent.base_id },
+      {
+        title,
+        fk_model_id: parent.id,
+        uidt: isLinks ? UITypes.Links : UITypes.LinkToAnotherRecord,
+        type: 'hm',
+        fk_target_view_id: childView?.id,
+        fk_child_column_id: childColumn.id,
+        fk_parent_column_id: parentColumn?.id || parent.primaryKey.id,
+        fk_related_model_id: child.id,
+        virtual,
+        system: isSystemCol,
+        fk_col_name: fkColName,
+        fk_index_name: fkColName,
+        meta,
+        ...(type === 'hm' ? colExtra : {}),
+        ...crossBaseProps,
+      },
+    );
+    await columnWebhookManager?.addNewColumnById({
+      columnId: savedColumn.id,
+      action: WebhookActions.INSERT,
     });
+    if (!isSystemCol)
+      Noco.appHooksService.emit(AppEvents.COLUMN_CREATE, {
+        table: parent,
+        column: savedColumn,
+        columnId: savedColumn.id,
+        req: req,
+        context,
+        columns: await parent.getCachedColumns(context),
+      });
   }
+  return savedColumn;
 }
 
 /**
@@ -124,6 +192,7 @@ export async function createHmAndBtColumn(
  */
 export async function createOOColumn(
   context: NcContext,
+  req: NcRequest,
   child: Model,
   parent: Model,
   childColumn: Column,
@@ -137,45 +206,90 @@ export async function createOOColumn(
   colExtra?: any,
   parentColumn?: Column,
   isCustom = false,
+  columnWebhookManager?: ColumnWebhookManager,
 ) {
+  let savedColumn: Column;
+
+  const childContext = { ...context, base_id: child.base_id };
+  const parentContext = { ...context, base_id: parent.base_id };
+
+  let crossBaseProps: {
+    fk_related_base_id?: string;
+    fk_related_source_id?: string;
+  } = {};
+
   // save bt column
   {
     const title = getUniqueColumnAliasName(
-      await child.getColumns(context),
+      await child.getColumns(parentContext),
       `${parent.title}`,
     );
-    await Column.insert<LinkToAnotherRecordColumn>(context, {
-      title,
-      fk_model_id: child.id,
-      // ref_db_alias
-      uidt: UITypes.LinkToAnotherRecord,
-      type: RelationTypes.ONE_TO_ONE,
-      // Child View ID is given for relation from parent to child. not for child to parent
-      fk_target_view_id: null,
-      fk_child_column_id: childColumn.id,
-      fk_parent_column_id: parentColumn?.id || parent.primaryKey.id,
-      fk_related_model_id: parent.id,
-      virtual,
-      // if self referencing treat it as system field to hide from ui
-      system: isSystemCol || parent.id === child.id,
-      fk_col_name: fkColName,
-      fk_index_name: fkColName,
-      // ...(colExtra || {}),
-      meta: {
-        ...(colExtra?.meta || {}),
-        // one-to-one relation is combination of both hm and bt to identify table which have
-        // foreign key column(similar to bt) we are adding a boolean flag `bt` under meta
-        bt: true,
-        custom: isCustom,
+
+    // if parent and child are from different base then set cross base props
+    if (parent.base_id !== child.base_id) {
+      crossBaseProps = {
+        fk_related_base_id: parent.base_id,
+        fk_related_source_id: parent.id,
+      };
+    }
+
+    const childRelCol = await Column.insert<LinkToAnotherRecordColumn>(
+      childContext,
+      {
+        title,
+        fk_model_id: child.id,
+        // ref_db_alias
+        uidt: UITypes.LinkToAnotherRecord,
+        type: RelationTypes.ONE_TO_ONE,
+        // Child View ID is given for relation from parent to child. not for child to parent
+        fk_target_view_id: null,
+        fk_child_column_id: childColumn.id,
+        fk_parent_column_id: parentColumn?.id || parent.primaryKey.id,
+        fk_related_model_id: parent.id,
+        virtual,
+        // if self referencing treat it as system field to hide from ui
+        system: isSystemCol || parent.id === child.id,
+        fk_col_name: fkColName,
+        fk_index_name: fkColName,
+        // ...(colExtra || {}),
+        meta: {
+          ...(colExtra?.meta || {}),
+          // one-to-one relation is combination of both hm and bt to identify table which have
+          // foreign key column(similar to bt) we are adding a boolean flag `bt` under meta
+          bt: true,
+          custom: isCustom,
+        },
+        ...crossBaseProps,
       },
+    );
+
+    await columnWebhookManager?.addNewColumnById({
+      columnId: childRelCol.id,
+      action: WebhookActions.INSERT,
+    });
+    Noco.appHooksService.emit(AppEvents.COLUMN_CREATE, {
+      table: child,
+      column: childRelCol,
+      columnId: childRelCol.id,
+      req,
+      context: childContext,
+      columns: await child.getCachedColumns(childContext),
     });
   }
   // save hm column
   {
     const title = getUniqueColumnAliasName(
-      await parent.getColumns(context),
+      await parent.getColumns(parentContext),
       alias || child.title,
     );
+
+    // if parent and child are from different base then set cross base props
+    if (parent.base_id !== child.base_id) {
+      crossBaseProps = {
+        fk_related_base_id: child.base_id,
+        fk_related_source_id: child.id,
+      };
+    }
 
     // remove bt flag from meta as it have to be on child column
     if (columnMeta?.bt) {
@@ -189,7 +303,7 @@ export async function createOOColumn(
       custom: isCustom,
     };
 
-    await Column.insert(context, {
+    savedColumn = await Column.insert(parentContext, {
       title,
       fk_model_id: parent.id,
       uidt: UITypes.LinkToAnotherRecord,
@@ -204,8 +318,23 @@ export async function createOOColumn(
       fk_index_name: fkColName,
       meta,
       ...(colExtra || {}),
+      ...crossBaseProps,
+    });
+
+    await columnWebhookManager?.addNewColumnById({
+      columnId: savedColumn.id,
+      action: WebhookActions.INSERT,
+    });
+    Noco.appHooksService.emit(AppEvents.COLUMN_CREATE, {
+      table: parent,
+      column: savedColumn,
+      columnId: savedColumn.id,
+      req,
+      context: parentContext,
+      columns: await parent.getCachedColumns(parentContext),
     });
   }
+  return savedColumn;
 }
 
 export async function validateRollupPayload(
@@ -220,6 +349,7 @@ export async function validateRollupPayload(
       'rollup_function',
     ],
     payload,
+    context,
   );
 
   const relation = await (
@@ -248,15 +378,16 @@ export async function validateRollupPayload(
   }
 
   const relatedTable = await relatedColumn.getModel(context);
-  if (
-    !(await relatedTable.getColumns(context)).find(
-      (c) => c.id === (payload as RollupColumnReqType).fk_rollup_column_id,
-    )
-  )
+
+  const rollupColumn = (await relatedTable.getColumns(context)).find(
+    (c) => c.id === (payload as RollupColumnReqType).fk_rollup_column_id,
+  );
+
+  if (!rollupColumn)
     throw new Error('Rollup column not found in related table');
 
   if (
-    !getAvailableRollupForUiType(relatedColumn.uidt).includes(
+    !getAvailableRollupForUiType(rollupColumn.uidt).includes(
       (payload as RollupColumnReqType).rollup_function,
     )
   ) {
@@ -276,6 +407,7 @@ export async function validateLookupPayload(
   validateParams(
     ['title', 'fk_relation_column_id', 'fk_lookup_column_id'],
     payload,
+    context,
   );
 
   // check for circular reference
@@ -299,7 +431,15 @@ export async function validateLookupPayload(
   const column = await Column.get(context, {
     colId: (payload as LookupColumnReqType).fk_relation_column_id,
   });
-  const relation = await column.getColOptions<LinkToAnotherRecordType>(context);
+
+  if (!column) {
+    throw new Error('Relation column not found');
+  }
+
+  const relation = await column.getColOptions<LinkToAnotherRecordColumn>(
+    context,
+  );
+  const { refContext } = relation.getRelContext(context);
 
   if (!relation) {
     throw new Error('Relation column not found');
@@ -308,18 +448,18 @@ export async function validateLookupPayload(
   let relatedColumn: Column;
   switch (relation.type) {
     case 'hm':
-      relatedColumn = await Column.get(context, {
+      relatedColumn = await Column.get(refContext, {
         colId: relation.fk_child_column_id,
       });
       break;
     case 'mm':
     case 'bt':
-      relatedColumn = await Column.get(context, {
+      relatedColumn = await Column.get(refContext, {
         colId: relation.fk_parent_column_id,
       });
       break;
     case 'oo':
-      relatedColumn = await Column.get(context, {
+      relatedColumn = await Column.get(refContext, {
         colId: column.meta?.bt
           ? relation.fk_parent_column_id
           : relation.fk_child_column_id,
@@ -327,9 +467,9 @@ export async function validateLookupPayload(
       break;
   }
 
-  const relatedTable = await relatedColumn.getModel(context);
+  const relatedTable = await relatedColumn.getModel(refContext);
   if (
-    !(await relatedTable.getColumns(context)).find(
+    !(await relatedTable.getColumns(refContext)).find(
       (c) => c.id === (payload as LookupColumnReqType).fk_lookup_column_id,
     )
   )
@@ -357,6 +497,21 @@ export const generateFkName = (parent: TableType, child: TableType) => {
     .replace(/\W+/g, '_')
     .slice(0, 10)}_${randomID()}`;
   return constraintName;
+};
+
+// Generate unique index name for custom link based on table title and column name
+export const generateIndexNameForCustomLink = (
+  tableTitle: string,
+  columnName: string,
+) => {
+  // sanitize and shorten tableTitle and columnName (max 10 chars each)
+  const sanitizedTable = tableTitle.replace(/\W+/g, '_').slice(0, 10);
+  const sanitizedColumn = columnName.replace(/\W+/g, '_').slice(0, 10);
+
+  // max length 40 chars, prefix with "idx_" to indicate index name
+  const indexName = `idx_${sanitizedTable}_${sanitizedColumn}_${randomID()}`;
+
+  return indexName;
 };
 
 export async function populateRollupForLTAR({
@@ -408,7 +563,10 @@ export async function populateRollupForLTAR({
 
 export const sanitizeColumnName = (name: string, sourceType?: DriverClient) => {
   if (process.env.NC_SANITIZE_COLUMN_NAME === 'false') return name;
-  let columnName = name.replace(/\W/g, '_');
+  let columnName = name.replace(
+    new RegExp(`[^${REGEXSTR_INTL_LETTER}${REGEXSTR_NUMERIC_ARABIC}_]`, 'g'),
+    '_',
+  );
 
   // if column name only contains _ then return as 'field'
   if (/^_+$/.test(columnName)) columnName = 'field';
@@ -449,4 +607,41 @@ export const getRefColumnIfAlias = async (
       (await Column.list(context, { fk_model_id: column.fk_model_id }))
     ).find((c) => c.system && c.uidt === column.uidt) || column
   );
+};
+
+export const travelLookupColumn = async ({
+  context,
+  column,
+}: {
+  context: NcContext;
+  column: Column;
+}) => {
+  const lookupColOptions = await column.getColOptions<LookupColumn>(context);
+  const targetColumn = await Column.get(context, {
+    colId: lookupColOptions.fk_lookup_column_id,
+  });
+
+  if (targetColumn.uidt === UITypes.Lookup) {
+    return travelLookupColumn({
+      context,
+      column: targetColumn,
+    });
+  } else {
+    return targetColumn;
+  }
+};
+
+export const getMMColumnNames = (parent: Model, child: Model) => {
+  const parentCn = `${parent.table_name.slice(0, 30)}_id`;
+  let childCn = `${child.table_name.slice(0, 30)}_id`;
+
+  // handle duplicate column names in self referencing tables or if first 30 characters are same
+  if (parentCn === childCn) {
+    childCn = `${child.table_name.slice(0, 29)}1_id`;
+  }
+
+  return {
+    parentCn,
+    childCn,
+  };
 };

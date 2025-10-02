@@ -1,17 +1,17 @@
 import {
+  convertMS2Duration,
   isCreatedOrLastModifiedByCol,
   isCreatedOrLastModifiedTimeCol,
   UITypes,
 } from 'nocodb-sdk';
 import request from 'supertest';
+import { expect } from 'chai';
 import Model from '../../../src/models/Model';
 import NcConnectionMgrv2 from '../../../src/utils/common/NcConnectionMgrv2';
-import type { ColumnType } from 'nocodb-sdk';
+import type { ColumnType, NcApiVersion } from 'nocodb-sdk';
 import type Column from '../../../src/models/Column';
 import type Filter from '../../../src/models/Filter';
-import type Base from '~/models/Base';
-import type Sort from '../../../src/models/Sort';
-import {View} from "~/models";
+import type { Base, Sort, View } from '../../../src/models';
 
 const rowValue = (column: ColumnType, index: number) => {
   switch (column.uidt) {
@@ -30,7 +30,7 @@ const rowValue = (column: ColumnType, index: number) => {
   }
 };
 
-const rowMixedValue = (column: ColumnType, index: number) => {
+const _rowMixedValue = (column: ColumnType, index: number) => {
   // Array of country names
   const countries = [
     'Afghanistan',
@@ -81,8 +81,33 @@ const rowMixedValue = (column: ColumnType, index: number) => {
     33.98,
     null,
   ];
-  const duration = [10, 20, 30, 40, 50, 60, null, 70, 80, 90, null];
+  const duration = [
+    10 * 60,
+    20 * 60,
+    30 * 60,
+    40 * 60,
+    50 * 60,
+    60 * 60,
+    null,
+    70 * 60,
+    80 * 60,
+    90 * 60,
+    null,
+  ];
   const rating = [0, 1, 2, 3, null, 0, 4, 5, 0, 1, null];
+  const year = [
+    1000,
+    1500,
+    2000,
+    3000,
+    null,
+    2022,
+    2024,
+    2025,
+    1980,
+    1909,
+    null,
+  ];
 
   // Array of random sample email strings (not more than 100 characters)
   const emails = [
@@ -170,6 +195,8 @@ const rowMixedValue = (column: ColumnType, index: number) => {
       return duration[index % duration.length];
     case UITypes.Rating:
       return rating[index % rating.length];
+    case UITypes.Year:
+      return year[index % year.length];
     case UITypes.SingleLineText:
       return countries[index % countries.length];
     case UITypes.Email:
@@ -203,6 +230,23 @@ const rowMixedValue = (column: ColumnType, index: number) => {
   }
 };
 
+const rowMixedValue = (
+  column: ColumnType,
+  index: number,
+  isV3: boolean = false,
+) => {
+  const val = _rowMixedValue(column, index);
+  if (isV3) {
+    if (column.uidt === UITypes.MultiSelect) {
+      return val ? (val as string).split(',') : val;
+    }
+  }
+  if (column.uidt === UITypes.Duration && !isV3) {
+    return val ? convertMS2Duration(val, 0) : val;
+  }
+  return val;
+};
+
 const getRow = async (context, { base, table, id }) => {
   const response = await request(context.app)
     .get(`/api/v1/db/data/noco/${base.id}/${table.id}/${id}`)
@@ -229,6 +273,7 @@ const listRow = async ({
     offset?: any;
     filterArr?: Filter[];
     sortArr?: Sort[];
+    apiVersion?: NcApiVersion;
   };
 }) => {
   const ctx = {
@@ -246,6 +291,38 @@ const listRow = async ({
   const ignorePagination = !options;
 
   return await baseModel.list(options, { ignorePagination });
+};
+
+const countRows = async ({
+  base,
+  table,
+  options,
+  view,
+}: {
+  base: Base;
+  table: Model;
+  view?: View;
+  options?: {
+    limit?: any;
+    offset?: any;
+    filterArr?: Filter[];
+    sortArr?: Sort[];
+    apiVersion?: NcApiVersion;
+  };
+}) => {
+  const ctx = {
+    workspace_id: base.fk_workspace_id,
+    base_id: base.id,
+  };
+
+  const sources = await base.getSources();
+  const baseModel = await Model.getBaseModelSQL(ctx, {
+    id: table.id,
+    dbDriver: await NcConnectionMgrv2.get(sources[0]!),
+    viewId: view?.id,
+  });
+
+  return await baseModel.count(options);
 };
 
 const getOneRow = async (
@@ -271,6 +348,7 @@ const generateDefaultRowAttributes = ({
       column.uidt === UITypes.LinkToAnotherRecord ||
       column.uidt === UITypes.ForeignKey ||
       column.uidt === UITypes.ID ||
+      column.uidt === UITypes.Order ||
       isCreatedOrLastModifiedTimeCol(column) ||
       isCreatedOrLastModifiedByCol(column)
     ) {
@@ -320,11 +398,44 @@ const createBulkRows = async (
     values: any[];
   },
 ) => {
-  await request(context.app)
+  const res = await request(context.app)
     .post(`/api/v1/db/data/bulk/noco/${base.id}/${table.id}`)
     .set('xc-auth', context.token)
     .send(values)
     .expect(200);
+};
+
+const createBulkRowsV3 = async (
+  context,
+  {
+    base,
+    table,
+    values,
+  }: {
+    base: Base;
+    table: Model;
+    values: any[];
+  },
+) => {
+  // Transform values to v3 format with fields wrapper
+  const v3Values = values.map((value) => ({ fields: value }));
+
+  // V3 API has a limit of 10 records per insert, so chunk the data
+  const chunkSize = 10;
+  const chunks: Array<Array<{ fields: any }>> = [];
+  for (let i = 0; i < v3Values.length; i += chunkSize) {
+    chunks.push(v3Values.slice(i, i + chunkSize));
+  }
+
+  // Insert chunks sequentially
+  for (const chunk of chunks) {
+    const res = await request(context.app)
+      .post(`/api/v3/data/${base.id}/${table.id}/records`)
+      .set('xc-auth', context.token)
+      .send(chunk);
+    
+    expect(res.status).to.equal(200);
+  }
 };
 
 // Links 2 table rows together. Will create rows if ids are not provided
@@ -373,9 +484,11 @@ const createChildRow = async (
 const generateMixedRowAttributes = ({
   columns,
   index = 0,
+  isV3 = false,
 }: {
   columns: ColumnType[];
   index?: number;
+  isV3?: boolean;
 }) =>
   columns.reduce((acc, column) => {
     if (
@@ -398,5 +511,7 @@ export {
   generateDefaultRowAttributes,
   generateMixedRowAttributes,
   createBulkRows,
+  createBulkRowsV3,
   rowMixedValue,
+  countRows,
 };

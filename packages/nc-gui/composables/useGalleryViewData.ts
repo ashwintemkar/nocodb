@@ -1,6 +1,5 @@
 import type { ComputedRef, Ref } from 'vue'
 import type { GalleryType, TableType, ViewType } from 'nocodb-sdk'
-import type { EventHook } from '@vueuse/core'
 
 export function useGalleryViewData(
   _meta: Ref<TableType | undefined> | ComputedRef<TableType | undefined>,
@@ -8,8 +7,6 @@ export function useGalleryViewData(
   where?: ComputedRef<string | undefined>,
 ) {
   const isPublic = inject(IsPublicInj, ref(false))
-
-  const { $api } = useNuxtApp()
 
   const tablesStore = useTablesStore()
 
@@ -19,7 +16,7 @@ export function useGalleryViewData(
 
   const meta = computed(() => _meta.value || activeTable.value)
 
-  const viewData = ref<GalleryType | undefined>()
+  const viewData = computed(() => (isPublic.value ? (sharedView.value?.view as GalleryType) : viewMeta.value?.view))
 
   const {
     cachedRows,
@@ -36,21 +33,18 @@ export function useGalleryViewData(
   } = useInfiniteData({
     meta,
     viewMeta,
-    callbacks: {},
+    callbacks: {
+      getWhereFilter: async () => where?.value ?? '',
+    },
     where,
+    isPublic,
   })
-
-  async function loadGalleryData() {
-    if (!viewMeta?.value?.id) return
-    viewData.value = isPublic.value ? (sharedView.value?.view as GalleryType) : await $api.dbView.galleryRead(viewMeta.value.id)
-  }
 
   return {
     cachedRows,
     deleteRow,
     loadData,
     navigateToSiblingRow,
-    loadGalleryData,
     viewData,
     totalRows,
     clearCache,

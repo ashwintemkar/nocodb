@@ -160,7 +160,7 @@ const isDuplicateAllowed = computed(() => {
 </script>
 
 <template>
-  <a-dropdown
+  <NcDropdown
     v-if="!isLocked"
     v-model:visible="isOpen"
     :trigger="['click']"
@@ -178,7 +178,7 @@ const isDuplicateAllowed = computed(() => {
       <component :is="iconMap.threeDotVertical" class="flex-none w-4 h-4" />
     </NcButton>
     <template #overlay>
-      <NcMenu class="flex flex-col gap-1 border-gray-200 nc-column-options">
+      <NcMenu class="nc-column-options" variant="small">
         <!-- Todo: Duplicate column with form column settings -->
         <!-- eslint-disable vue/no-constant-condition -->
         <NcMenuItem v-if="false" :disabled="!isDuplicateAllowed" @click="openDuplicateDlg">
@@ -190,19 +190,19 @@ const isDuplicateAllowed = computed(() => {
         </NcMenuItem>
 
         <NcMenuItem :disabled="isRequired" @click="hideField">
-          <div class="nc-column-insert-before nc-form-header-menu-item">
-            <component :is="iconMap.eye" class="!w-3.75 !h-3.75" />
+          <div class="nc-column-hide-or-show nc-form-header-menu-item">
+            <component :is="iconMap.eyeSlash" class="!w-3.75 !h-3.75" />
             <!-- Hide Field -->
             {{ $t('general.hideField') }}
           </div>
         </NcMenuItem>
 
         <template v-if="!column?.pv">
-          <a-divider class="!my-0" />
+          <NcDivider />
 
-          <NcMenuItem :disabled="!isDeleteAllowed" class="!hover:bg-red-50" @click="handleDelete">
-            <div class="nc-column-delete nc-form-header-menu-item text-red-600">
-              <component :is="iconMap.delete" />
+          <NcMenuItem :disabled="!isDeleteAllowed" danger @click="handleDelete">
+            <div class="nc-column-delete nc-form-header-menu-item">
+              <GeneralIcon icon="delete" />
               <!-- Delete -->
               {{ $t('general.delete') }}
             </div>
@@ -210,7 +210,7 @@ const isDuplicateAllowed = computed(() => {
         </template>
       </NcMenu>
     </template>
-  </a-dropdown>
+  </NcDropdown>
   <SmartsheetHeaderDeleteColumnModal
     v-model:visible="showDeleteColumnModal"
     class="nc-form-column-delete-dropdown"

@@ -1,6 +1,10 @@
 <script lang="ts" setup>
 const el = ref()
 
+const cellClickHook = createEventHook()
+
+provide(OnDivDataCellEventHookInj, cellClickHook)
+
 provide(CurrentCellInj, el)
 
 const isExpandedFormOpen = inject(IsExpandedFormOpenInj, ref(false))!
@@ -26,7 +30,7 @@ const onTabPress = () => {
 </script>
 
 <template>
-  <div ref="el" class="select-none nc-data-cell" @keydown.tab="onTabPress">
+  <div ref="el" class="select-none nc-data-cell" @keydown.tab="onTabPress" @click="cellClickHook.trigger($event)">
     <slot />
   </div>
 </template>
@@ -36,6 +40,6 @@ const onTabPress = () => {
   @apply !border-1 !border-brand-500 !rounded-lg !shadow-none !ring-0;
 }
 .nc-data-cell {
-  @apply border-1 border-gray-200 overflow-hidden rounded-lg;
+  @apply border-1 border-nc-border-gray-medium overflow-hidden rounded-lg;
 }
 </style>

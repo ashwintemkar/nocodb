@@ -4,6 +4,7 @@ import Hook from '~/models/Hook';
 import Noco from '~/Noco';
 import { extractProps } from '~/helpers/extractProps';
 import { MetaTable } from '~/utils/globals';
+import { isOnPrem } from '~/utils';
 
 export default class HookLog implements HookLogType {
   id?: string;
@@ -124,11 +125,22 @@ export default class HookLog implements HookLogType {
   ) {
     const qb = ncMeta.knex(MetaTable.HOOK_LOGS);
 
+    if (context.workspace_id) {
+      qb.where(`${MetaTable.HOOK_LOGS}.fk_workspace_id`, context.workspace_id);
+    }
+
+    if (context.base_id) {
+      qb.where(`${MetaTable.HOOK_LOGS}.base_id`, context.base_id);
+    }
+
     if (hookId) {
       qb.where(`${MetaTable.HOOK_LOGS}.fk_hook_id`, hookId);
     }
 
-    if (process.env.NC_AUTOMATION_LOG_LEVEL === 'ERROR') {
+    if (
+      process.env.NC_AUTOMATION_LOG_LEVEL === 'ERROR' ||
+      (isOnPrem && process.env.NC_AUTOMATION_LOG_LEVEL !== 'OFF')
+    ) {
       qb.whereNotNull(`${MetaTable.HOOK_LOGS}.error_message`);
     }
 

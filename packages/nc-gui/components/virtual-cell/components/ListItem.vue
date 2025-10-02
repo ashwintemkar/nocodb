@@ -1,34 +1,45 @@
 <script lang="ts" setup>
-import { UITypes, isVirtualCol, parseStringDateTime } from 'nocodb-sdk'
-
-import MaximizeIcon from '~icons/nc-icons/maximize'
+import { PermissionEntity, PermissionKey, isVirtualCol } from 'nocodb-sdk'
 
 const props = withDefaults(
   defineProps<{
     row: any
     fields: any[]
     attachment: any
+    displayValueColumn: any
     relatedTableDisplayValueProp: string
     displayValueTypeAndFormatProp: { type: string; format: string }
     isLoading: boolean
     isLinked: boolean
+    isSelected?: boolean
   }>(),
   {
     isLoading: false,
+    isSelected: false,
   },
 )
 
 defineEmits(['expand', 'linkOrUnlink'])
 
+const { showExtraFields, relatedTableMeta } = useLTARStoreOrThrow()!
+
 provide(IsExpandedFormOpenInj, ref(true))
 
 provide(RowHeightInj, ref(1 as const))
 
+provide(IsUnderLookupInj, ref(true))
+
+provide(IsLinkRecordDropdownInj, ref(true))
+
 const isForm = inject(IsFormInj, ref(false))
+
+provide(IsFormInj, ref(false))
+
+provide(MetaInj, relatedTableMeta)
 
 const row = useVModel(props, 'row')
 
-const { isLinked, isLoading } = toRefs(props)
+const { isLinked, isLoading, isSelected } = toRefs(props)
 
 const isPublic = inject(IsPublicInj, ref(false))
 
@@ -55,21 +66,6 @@ const attachments: ComputedRef<Attachment[]> = computed(() => {
     return []
   }
 })
-
-const displayValue = computed(() => {
-  if (
-    row.value[props.relatedTableDisplayValueProp] &&
-    props.displayValueTypeAndFormatProp.type &&
-    props.displayValueTypeAndFormatProp.format
-  ) {
-    return parseStringDateTime(
-      row.value[props.relatedTableDisplayValueProp],
-      props.displayValueTypeAndFormatProp.format,
-      !(props.displayValueTypeAndFormatProp.format === UITypes.Time),
-    )
-  }
-  return row.value[props.relatedTableDisplayValueProp]
-})
 </script>
 
 <template>
@@ -80,6 +76,7 @@ const displayValue = computed(() => {
       :class="{
         '!bg-white': isLoading,
         '!hover:bg-white': readOnly,
+        'nc-is-selected': isSelected,
       }"
       :body-style="{ padding: '6px 10px !important', borderRadius: 0 }"
       :hoverable="false"
@@ -106,16 +103,18 @@ const displayValue = computed(() => {
             <GeneralIcon class="w-full h-full !text-6xl !leading-10 !text-transparent rounded-lg" icon="fileImage" />
           </div>
         </template>
-
         <div class="flex-1 flex flex-col gap-1 justify-center overflow-hidden">
           <div class="flex justify-start">
-            <span class="font-semibold text-brand-500 nc-display-value truncate leading-[20px]">
-              {{ displayValue }}
-            </span>
+            <SmartsheetPlainCell
+              v-if="displayValueColumn"
+              class="font-semibold text-brand-500 nc-display-value truncate leading-[20px]"
+              :column="displayValueColumn"
+              :model-value="row[displayValueColumn.title]"
+            />
           </div>
 
           <div
-            v-if="fields.length > 0 && !isPublic && !isForm"
+            v-if="fields.length > 0 && showExtraFields"
             class="flex ml-[-0.25rem] sm:flex-row xs:(flex-col mt-2) gap-4 min-h-5"
           >
             <div v-for="field in fields" :key="field.id" class="sm:(w-1/3 max-w-1/3 overflow-hidden)">
@@ -127,22 +126,31 @@ const displayValue = computed(() => {
                       class="text-gray-100 !text-sm nc-link-record-cell-tooltip"
                       :column="field"
                       :hide-menu="true"
+                      hide-icon-tooltip
                     />
                     <LazySmartsheetHeaderCell
                       v-else
                       class="text-gray-100 !text-sm nc-link-record-cell-tooltip"
                       :column="field"
                       :hide-menu="true"
+                      hide-icon-tooltip
                     />
                   </template>
                   <div class="nc-link-record-cell flex w-full max-w-full">
-                    <LazySmartsheetVirtualCell v-if="isVirtualCol(field)" v-model="row[field.title]" :row="row" :column="field" />
+                    <LazySmartsheetVirtualCell
+                      v-if="isVirtualCol(field)"
+                      v-model="row[field.title]"
+                      :row="row"
+                      :column="field"
+                      class="!h-auto"
+                    />
                     <LazySmartsheetCell
                       v-else
                       v-model="row[field.title]"
                       :column="field"
                       :edit-enabled="false"
                       :read-only="true"
+                      class="!h-auto"
                     />
                   </div>
                 </NcTooltip>
@@ -151,39 +159,46 @@ const displayValue = computed(() => {
             </div>
           </div>
         </div>
-        <div v-if="!isForm && !isPublic && !readOnly" class="flex-none flex items-center w-7">
-          <NcTooltip class="flex">
+        <div v-if="!isForm && !isPublic" class="flex-none flex items-center w-7" @clcik.stop>
+          <NcTooltip class="flex" hide-on-click>
             <template #title>{{ $t('title.expand') }}</template>
 
             <button
               v-e="['c:row-expand:open']"
               :tabindex="-1"
               class="z-10 flex items-center justify-center nc-expand-item !group-hover:visible !invisible !h-7 !w-7 transition-all !hover:children:(w-4.5 h-4.5)"
-              @click.stop="$emit('expand', row)"
+              @click="$emit('expand', row)"
             >
-              <MaximizeIcon class="flex-none w-4 h-4 scale-125" />
+              <GeneralIcon icon="maximize" class="flex-none w-4 h-4 scale-125" />
             </button>
           </NcTooltip>
         </div>
         <template v-if="(!isPublic && !readOnly) || isForm">
-          <NcTooltip class="z-10 flex">
-            <template #title> {{ isLinked ? 'Unlink' : 'Link' }}</template>
-
-            <button
-              tabindex="-1"
-              class="nc-list-item-link-unlink-btn p-1.5 flex rounded-lg transition-all"
-              :class="{
-                'bg-gray-200 text-gray-800 hover:(bg-red-100 text-red-500)': isLinked,
-                'bg-green-[#D4F7E0] text-[#17803D] hover:bg-green-200': !isLinked,
-              }"
-              @click="$emit('linkOrUnlink')"
-            >
-              <div v-if="isLoading" class="flex">
-                <MdiLoading class="flex-none w-4 h-4 !text-brand-500 animate-spin" />
-              </div>
-              <GeneralIcon v-else :icon="isLinked ? 'minus' : 'plus'" class="flex-none w-4 h-4 !font-extrabold" />
-            </button>
-          </NcTooltip>
+          <PermissionsTooltip
+            class="z-10 flex"
+            :entity="PermissionEntity.FIELD"
+            :entity-id="relatedTableMeta?.id"
+            :permission="PermissionKey.RECORD_FIELD_EDIT"
+            :default-tooltip="isLinked ? 'Unlink' : 'Link'"
+          >
+            <template #default="{ isAllowed }">
+              <button
+                tabindex="-1"
+                class="nc-list-item-link-unlink-btn p-1.5 flex rounded-lg transition-all"
+                :class="{
+                  'bg-gray-200 text-gray-800 hover:(bg-red-100 text-red-500)': isLinked,
+                  'bg-green-[#D4F7E0] text-[#17803D] hover:bg-green-200': !isLinked,
+                }"
+                :disabled="!isAllowed"
+                @click="$emit('linkOrUnlink')"
+              >
+                <div v-if="isLoading" class="flex">
+                  <MdiLoading class="flex-none w-4 h-4 !text-brand-500 animate-spin" />
+                </div>
+                <GeneralIcon v-else :icon="isLinked ? 'minus' : 'plus'" class="flex-none w-4 h-4 !font-extrabold" />
+              </button>
+            </template>
+          </PermissionsTooltip>
         </template>
       </div>
     </a-card>
@@ -259,13 +274,16 @@ const displayValue = computed(() => {
       .ant-select-selector {
         @apply !border-none flex-nowrap pr-4.5;
       }
-      .ant-select-arrow {
+      .ant-select-arrow,
+      .ant-select-clear {
         @apply right-[3px];
       }
     }
   }
 }
 .nc-link-record-cell-tooltip {
+  @apply !bg-transparent !hover:bg-transparent;
+
   :deep(.nc-cell-icon) {
     @apply !ml-0;
   }
@@ -279,7 +297,8 @@ const displayValue = computed(() => {
 .nc-list-item {
   @apply border-1 border-transparent rounded-md;
 
-  &:focus-visible {
+  &:focus-visible,
+  &.nc-is-selected {
     @apply border-brand-500;
     box-shadow: 0 0 0 1px #3366ff;
   }

@@ -8,6 +8,11 @@ import {
   type AttachmentResType,
   type ColumnType,
   type LinkToAnotherRecordType,
+  PermissionEntity,
+  PermissionKey,
+  PlanFeatureTypes,
+  PlanLimitTypes,
+  PlanTitles,
   ProjectRoles,
   RelationTypes,
   UITypes,
@@ -17,27 +22,13 @@ import {
   isVirtualCol,
 } from 'nocodb-sdk'
 import type { ValidateInfo } from 'ant-design-vue/es/form/useForm'
-import type { ImageCropperConfig } from '~/lib/types'
+import type { ImageCropperConfig } from '#imports'
 
 provide(IsFormInj, ref(true))
 provide(IsGalleryInj, ref(false))
 
 // todo: generate hideCols based on default values
 const hiddenCols = ['created_at', 'updated_at']
-
-const hiddenColTypes = [
-  UITypes.Rollup,
-  UITypes.Lookup,
-  UITypes.Formula,
-  UITypes.QrCode,
-  UITypes.Barcode,
-  UITypes.Button,
-  UITypes.SpecificDBType,
-  UITypes.CreatedTime,
-  UITypes.LastModifiedTime,
-  UITypes.CreatedBy,
-  UITypes.LastModifiedBy,
-]
 
 const hiddenBubbleMenuOptions = [
   RichTextBubbleMenuOptions.code,
@@ -60,9 +51,11 @@ const { isUIAllowed } = useRoles()
 
 const { metas, getMeta } = useMetas()
 
-const { base } = storeToRefs(useBase())
+const { base, showBaseAccessRequestOverlay } = storeToRefs(useBase())
 
 const { getPossibleAttachmentSrc } = useAttachment()
+
+const { isAllowed } = usePermissions()
 
 const secondsRemain = ref(0)
 
@@ -98,20 +91,25 @@ const {
   checkFieldVisibility,
 } = useProvideFormViewStore(meta, view, formViewData, updateFormView, isEditable)
 
+const { isSyncedTable } = useSmartsheetStoreOrThrow()
+
 const { preFillFormSearchParams } = storeToRefs(useViewsStore())
 
 const reloadEventHook = inject(ReloadViewDataHookInj, createEventHook())
+const { withLoading } = useLoadingTrigger()
 
-reloadEventHook.on(async (params) => {
-  if (params?.isFormFieldFilters) {
-    setTimeout(() => {
-      checkFieldVisibility()
-    }, 100)
-  } else {
-    await Promise.all([loadFormView(), loadReleatedMetas()])
-    setFormData()
-  }
-})
+reloadEventHook.on(
+  withLoading(async (params) => {
+    if (params?.isFormFieldFilters) {
+      setTimeout(() => {
+        checkFieldVisibility()
+      }, 100)
+    } else {
+      await Promise.all([loadFormView(), loadReleatedMetas()])
+      setFormData()
+    }
+  }),
+)
 
 const { fields, showAll, hideAll } = useViewColumnsOrThrow()
 
@@ -123,7 +121,11 @@ const { state, row } = useProvideSmartsheetRowStore(
   }),
 )
 
+const { blockAddNewRecord, navigateToPricing, getPlanTitle, activePlan, isWsOwner } = useEeConfig()
+
 const columns = computed(() => meta?.value?.columns || [])
+
+const isSidebarVisible = ref(ncIsPlaywright())
 
 const draggableRef = ref()
 
@@ -187,12 +189,29 @@ const { open, onChange: onChangeFile } = useFileDialog({
   reset: true,
 })
 
+const isAllowedToAddRecord = computed(
+  () =>
+    !meta?.value?.id ||
+    isAllowed(PermissionEntity.TABLE, meta.value.id, PermissionKey.TABLE_RECORD_ADD, {
+      isFormView: true,
+    }),
+)
+
+const disableFormSubmit = computed(
+  () =>
+    !isUIAllowed('dataInsert') ||
+    !visibleColumns.value.length ||
+    blockAddNewRecord.value ||
+    isSyncedTable.value ||
+    !isAllowedToAddRecord.value,
+)
+
 const editOrAddProviderRef = ref()
 
 const onVisibilityChange = (state: 'showAddColumn' | 'showEditColumn') => {
   dropdownStates.value[state] = true
 
-  if (editOrAddProviderRef.value && !editOrAddProviderRef.value?.isWebHookModalOpen()) {
+  if (editOrAddProviderRef.value && !editOrAddProviderRef.value?.shouldKeepModalOpen()) {
     dropdownStates.value[state] = false
   }
 }
@@ -282,7 +301,7 @@ const getPrefillValue = (c: ColumnType, value: any) => {
 }
 
 const updatePreFillFormSearchParams = useDebounceFn(() => {
-  if (isLocked.value || !isUIAllowed('dataInsert')) return
+  if (isLocked.value || disableFormSubmit.value) return
 
   const preFilledData = { ...formState.value, ...state.value }
 
@@ -309,8 +328,12 @@ const updatePreFillFormSearchParams = useDebounceFn(() => {
   preFillFormSearchParams.value = searchParams.toString()
 }, 250)
 
+const isFormSubmitting = ref(false)
+
 async function submitForm() {
-  if (!isUIAllowed('dataInsert')) return
+  if (disableFormSubmit.value) return
+
+  isFormSubmitting.value = true
 
   for (const col of localColumns.value) {
     if (col.show && col.title && isRequired(col, col.required) && formState.value[col.title] === undefined) {
@@ -318,7 +341,7 @@ async function submitForm() {
     }
 
     // handle filter out conditionally hidden field data
-    if ((!col.visible || !col.show) && col.title) {
+    if ((!col.visible || !col.show || !col.permissions?.isAllowedToEdit) && col.title) {
       delete formState.value[col.title]
       delete state.value[col.title]
     }
@@ -335,6 +358,7 @@ async function submitForm() {
 
     if (e?.errorFields?.length) {
       message.error(t('msg.error.someOfTheRequiredFieldsAreEmpty'))
+      isFormSubmitting.value = false
       return
     }
   }
@@ -344,6 +368,8 @@ async function submitForm() {
     oldRow: {},
     rowMeta: { new: true },
   })
+
+  isFormSubmitting.value = false
 
   if (res) {
     submitted.value = true
@@ -407,12 +433,20 @@ async function onMove(event: any, isVisibleFormFields = false) {
 
   const fieldIndex = fields.value?.findIndex((f) => f?.fk_column_id === element.fk_column_id)
 
-  if (fieldIndex === -1 || fieldIndex === undefined || !fields.value?.[fieldIndex]) return
+  if (
+    fieldIndex === -1 ||
+    fieldIndex === undefined ||
+    !fields.value?.[fieldIndex] ||
+    (isVisibleFormFields && !visibleColumns.value[newIndex])
+  ) {
+    return
+  }
 
   if (isVisibleFormFields) {
     element = localColumns.value[localColumns.value?.findIndex((c) => c.fk_column_id === element.fk_column_id)]
-    newIndex = localColumns.value.findIndex((c) => c.fk_column_id === visibleColumns.value[newIndex].fk_column_id)
+    newIndex = localColumns.value.findIndex((c) => c.fk_column_id === visibleColumns.value[newIndex]!.fk_column_id)
   }
+
   if (!localColumns.value.length || localColumns.value.length === 1) {
     element.order = 1
   } else if (localColumns.value.length - 1 === newIndex) {
@@ -498,7 +532,7 @@ async function handleAddOrRemoveAllColumns<T>(value: T) {
 
 async function checkSMTPStatus() {
   if (emailMe.value && !isEeUI) {
-    const emailPluginActive = await $api.plugin.status('SMTP')
+    const emailPluginActive = await $api.plugin.status('smtp')
     if (!emailPluginActive) {
       emailMe.value = false
       // Please activate SMTP plugin in App store for enabling email notification
@@ -536,7 +570,7 @@ function setFormData() {
   emailMe.value = data[user.value?.email as string]
 
   localColumns.value = col
-    .filter((f) => !hiddenColTypes.includes(f.uidt) && !systemFieldsIds.value.includes(f.fk_column_id))
+    .filter((f) => !isFormViewHiddenCol(f) && !systemFieldsIds.value.includes(f.fk_column_id))
     .sort((a, b) => a.order - b.order)
     .map((c) => ({ ...c, required: !!c.required }))
 
@@ -589,7 +623,7 @@ async function deleteColumnCallback() {
   reloadEventHook.trigger()
 }
 
-const onFormItemClick = (element: any, sidebarClick: boolean = false) => {
+const onFormItemClick = (element: any, sidebarClick = false) => {
   if (isLocked.value || !isEditable) return
 
   if (sidebarClick) {
@@ -669,18 +703,34 @@ const handleOnUploadImage = (data: AttachmentResType = null) => {
   updateView()
 }
 
+const isFocusedFieldLabel = ref(false)
+
 const onFocusActiveFieldLabel = (e: FocusEvent) => {
+  isFocusedFieldLabel.value = true
+
+  if (activeField.value && !activeField.value.label) {
+    activeField.value.label = activeField.value?.title ?? ''
+  }
+
   ;(e.target as HTMLTextAreaElement).select()
 }
+
+const activeFieldLabel = computed(() => {
+  if (!isFocusedFieldLabel.value && !activeField.value?.label) {
+    return activeField.value?.title
+  }
+
+  return activeField.value?.label ?? ''
+})
+
+onClickOutside(focusLabel, () => {
+  isFocusedFieldLabel.value = false
+})
 
 const updateFieldTitle = (value: string) => {
   if (!activeField.value) return
 
-  if (activeField.value.title === value) {
-    activeField.value.label = null
-  } else {
-    activeField.value.label = value
-  }
+  activeField.value.label = value.trimStart()
 }
 
 const handleAutoScrollFormField = (title: string, isSidebar: boolean) => {
@@ -744,8 +794,8 @@ watch(submitted, (v) => {
   }
 })
 
-watch(view, (nextView) => {
-  if (nextView?.type === ViewTypes.FORM) {
+watch(view, (nextView, oldView) => {
+  if (nextView?.type === ViewTypes.FORM && nextView?.id !== oldView?.id) {
     reloadEventHook.trigger()
   }
 })
@@ -772,6 +822,9 @@ watch(
 )
 
 watch(activeField, (newValue, oldValue) => {
+  if (newValue && !isSidebarVisible.value) {
+    isSidebarVisible.value = true
+  }
   if (newValue && autoScrollFormField.value) {
     nextTick(() => {
       handleAutoScrollFormField(newValue.title, false)
@@ -838,7 +891,7 @@ useEventListener(
     if (
       (draggableRef.value?.targetDomElement && draggableRef.value?.targetDomElement.contains(e.target)) ||
       (e.target as HTMLElement)?.closest(
-        '.nc-form-right-panel, [class*="dropdown"], .nc-form-rich-text-field, .ant-modal, .ant-modal-wrap, .nc-share-base-button, .nc-form-right-sidebar-content-resizable-wrapper .splitpanes__splitter',
+        '.nc-form-right-panel, [class*="dropdown"], .nc-form-rich-text-field, .ant-modal, .ant-modal-wrap, .nc-share-base-button, .nc-form-right-sidebar-content-resizable-wrapper .splitpanes__splitter, .nc-sidebar-toggle-btn',
       )
     ) {
       return
@@ -847,6 +900,24 @@ useEventListener(
     activeRow.value = ''
   },
   true,
+)
+
+const handleOnClick = (e: MouseEvent) => {
+  if (isSidebarVisible.value) return
+
+  const target = e.target as HTMLElement
+  const parentPreview = target.closest('.nc-form-preview')
+
+  const isChildOfPreview = parentPreview && target !== parentPreview
+
+  if (isChildOfPreview) {
+    isSidebarVisible.value = true
+  }
+}
+
+const { message: templatedMessage } = useTemplatedMessage(
+  computed(() => formViewData?.value?.success_msg),
+  computed(() => formState.value),
 )
 </script>
 
@@ -900,8 +971,8 @@ useEventListener(
                   <a-alert class="nc-form-success-msg !my-4 !py-4 text-left !rounded-lg" type="success" outlined>
                     <template #message>
                       <LazyCellRichText
-                        v-if="formViewData?.success_msg?.trim()"
-                        :value="formViewData?.success_msg"
+                        v-if="templatedMessage"
+                        :value="templatedMessage"
                         class="!h-auto -ml-1"
                         is-form-field
                         read-only
@@ -952,13 +1023,42 @@ useEventListener(
           </div>
         </div>
         <template v-else-if="formViewData">
-          <SmartsheetFormLayout>
+          <SmartsheetFormLayout :is-sidebar-visible="isSidebarVisible">
             <template #preview>
               <div
                 class="w-full h-full overflow-auto nc-form-scrollbar p-6"
                 :style="{background:(formViewData?.meta as Record<string,any>).background_color || '#F9F9FA'}"
               >
-                <div class="min-w-[616px] overflow-x-auto nc-form-scrollbar">
+                <Transition
+                  enter-active-class="transition-opacity delay-300 duration-300"
+                  enter-from-class="opacity-0"
+                  enter-to-class="opacity-100"
+                  leave-active-class="transition-opacity duration-0"
+                  leave-from-class="opacity-0"
+                  leave-to-class="opacity-0"
+                >
+                  <div v-show="!isSidebarVisible" class="absolute top-4 right-4 z-499">
+                    <NcTooltip placement="topRight" class="nc-sidebar-toggle-btn">
+                      <template #title> {{ $t('activity.toggleSidebar') }}</template>
+                      <NcButton icon-only size="small" type="secondary" @click.stop="isSidebarVisible = true">
+                        <template #icon>
+                          <GeneralIcon icon="sidebar" class="w-4 h-4" />
+                        </template>
+                      </NcButton>
+                    </NcTooltip>
+                  </div>
+                </Transition>
+                <div class="nc-form-preview min-w-[616px] overflow-x-auto nc-form-scrollbar" @click="handleOnClick">
+                  <div v-if="!isAllowedToAddRecord" class="mb-6">
+                    <NcAlert
+                      type="warning"
+                      show-icon
+                      class="mt-6 bg-nc-bg-orange-light max-w-[max(33%,688px)] mx-auto"
+                      :message="$t('objects.permissions.formCannotAcceptSubmissions')"
+                      :description="$t('objects.permissions.formCannotAcceptSubmissionsDescription')"
+                    />
+                  </div>
+
                   <GeneralImageCropper
                     v-if="isEditable"
                     v-model:show-cropper="showCropper"
@@ -981,23 +1081,35 @@ useEventListener(
                               {{ $t('msg.info.thisFeatureIsOnlyAvailableInEnterpriseEdition') }}
                             </div>
                           </template>
-
-                          <NcButton
-                            type="secondary"
-                            size="small"
-                            class="nc-form-upload-banner-btn"
-                            data-testid="nc-form-upload-banner-btn"
-                            :disabled="!isEeUI || isLocked"
-                            @click="openUploadImage(true)"
-                          >
-                            <div class="flex gap-2 items-center">
-                              <component :is="iconMap.upload" class="w-4 h-4" />
-                              <span>
-                                {{ formViewData.banner_image_url ? $t('general.replace') : $t('general.upload') }}
-                                {{ $t('general.banner') }}
-                              </span>
-                            </div>
-                          </NcButton>
+                          <PaymentUpgradeBadgeProvider :feature="PlanFeatureTypes.FEATURE_FORM_CUSTOM_LOGO">
+                            <template #default="{ click }">
+                              <NcButton
+                                type="secondary"
+                                size="small"
+                                class="nc-form-upload-banner-btn"
+                                data-testid="nc-form-upload-banner-btn"
+                                :disabled="!isEeUI || isLocked"
+                                @click.stop="click(PlanFeatureTypes.FEATURE_FORM_CUSTOM_LOGO, () => openUploadImage(true))"
+                              >
+                                <div class="flex gap-2 items-center">
+                                  <component :is="iconMap.upload" class="w-4 h-4" />
+                                  <span>
+                                    {{ formViewData.banner_image_url ? $t('general.replace') : $t('general.upload') }}
+                                    {{ $t('general.banner') }}
+                                  </span>
+                                  <LazyPaymentUpgradeBadge
+                                    v-if="!isLocked"
+                                    :feature="PlanFeatureTypes.FEATURE_FORM_CUSTOM_LOGO"
+                                    :content="
+                                      $t('upgrade.upgradeToAddCustomBannerSubtitle', {
+                                        plan: getPlanTitle(PlanTitles.PLUS),
+                                      })
+                                    "
+                                  />
+                                </div>
+                              </NcButton>
+                            </template>
+                          </PaymentUpgradeBadgeProvider>
                         </NcTooltip>
                         <NcTooltip v-if="isEeUI && formViewData.banner_image_url" :disabled="isLocked">
                           <template #title> {{ $t('general.delete') }} {{ $t('general.banner') }} </template>
@@ -1007,7 +1119,7 @@ useEventListener(
                             class="nc-form-delete-banner-btn"
                             data-testid="nc-form-delete-banner-btn"
                             :disabled="isLocked"
-                            @click="
+                            @click.stop="
                               () => {
                                 if (isEditable) {
                                   formViewData!.banner_image_url = null
@@ -1024,6 +1136,29 @@ useEventListener(
                       </div>
                     </div>
                   </div>
+                  <NcAlert
+                    v-if="blockAddNewRecord"
+                    type="warning"
+                    show-icon
+                    class="mt-6 bg-nc-bg-orange-light max-w-[max(33%,688px)] mx-auto"
+                    :message="$t('upgrade.updateToAddRecordFormView')"
+                    :description="
+                      $t('upgrade.updateToAddRecordFormViewSubtitle', {
+                        activePlan: getPlanTitle(activePlan?.title),
+                      })
+                    "
+                  >
+                    <template #action>
+                      <NcButton
+                        class="nc-upgrade-plan-btn"
+                        type="primary"
+                        size="small"
+                        @click.stop="navigateToPricing({ limitOrFeature: PlanLimitTypes.LIMIT_RECORD_PER_WORKSPACE })"
+                      >
+                        {{ isWsOwner ? $t('labels.upgradePlan') : $t('general.requestUpgrade') }}
+                      </NcButton>
+                    </template>
+                  </NcAlert>
                   <a-card
                     class="!py-8 !lg:py-12 !border-gray-200 !rounded-3xl !mt-6 !max-w-[max(33%,688px)] !mx-auto"
                     :body-style="{
@@ -1037,11 +1172,11 @@ useEventListener(
                         <!-- Form logo  -->
                         <div class="mb-4">
                           <div
-                            class="nc-form-logo-wrapper mx-6 group relative inline-block h-56px overflow-hidden flex items-center"
+                            class="nc-form-logo-wrapper mx-6 group relative h-56px overflow-hidden inline-flex items-center"
                             :class="
                               formViewData.logo_url
                                 ? 'max-w-189px hover:(w-full bg-gray-100 rounded-xl) '
-                                : 'bg-gray-100 max-w-147px rounded-xl'
+                                : 'bg-gray-100  rounded-xl'
                             "
                             style="transition: all 0.3s ease-in"
                           >
@@ -1050,6 +1185,7 @@ useEventListener(
                               :key="formViewData.logo_url?.path"
                               :srcs="getFormLogoSrc"
                               class="flex-none nc-form-logo !object-contain object-left max-h-full max-w-full !m-0"
+                              :is-cell-preview="false"
                             />
                             <div
                               class="items-center space-x-1 flex-nowrap m-3"
@@ -1061,20 +1197,38 @@ useEventListener(
                                     {{ $t('msg.info.thisFeatureIsOnlyAvailableInEnterpriseEdition') }}
                                   </div>
                                 </template>
-                                <NcButton
+                                <PaymentUpgradeBadgeProvider
                                   v-if="isEditable"
-                                  type="secondary"
-                                  size="small"
-                                  class="nc-form-upload-logo-btn"
-                                  data-testid="nc-form-upload-log-btn"
-                                  :disabled="!isEeUI || isLocked"
-                                  @click="openUploadImage(false)"
+                                  :feature="PlanFeatureTypes.FEATURE_FORM_CUSTOM_LOGO"
                                 >
-                                  <div class="flex gap-2 items-center">
-                                    <component :is="iconMap.upload" class="w-4 h-4" />
-                                    <span> {{ formViewData.logo_url ? $t('general.replace') : $t('general.upload') }} Logo</span>
-                                  </div>
-                                </NcButton>
+                                  <template #default="{ click }">
+                                    <NcButton
+                                      type="secondary"
+                                      size="small"
+                                      class="nc-form-upload-logo-btn group"
+                                      data-testid="nc-form-upload-log-btn"
+                                      :disabled="!isEeUI || isLocked"
+                                      @click.stop="click(PlanFeatureTypes.FEATURE_FORM_CUSTOM_LOGO, () => openUploadImage(false))"
+                                    >
+                                      <div class="flex gap-2 items-center">
+                                        <component :is="iconMap.upload" class="w-4 h-4" />
+                                        <span>
+                                          {{ formViewData.logo_url ? $t('general.replace') : $t('general.upload') }} Logo</span
+                                        >
+                                        <LazyPaymentUpgradeBadge
+                                          v-if="!isLocked"
+                                          :feature="PlanFeatureTypes.FEATURE_FORM_CUSTOM_LOGO"
+                                          :content="
+                                            $t('upgrade.upgradeToAddCustomLogoSubtitle', {
+                                              plan: getPlanTitle(PlanTitles.PLUS),
+                                            })
+                                          "
+                                          class="-my-1"
+                                        />
+                                      </div>
+                                    </NcButton>
+                                  </template>
+                                </PaymentUpgradeBadgeProvider>
                               </NcTooltip>
                               <NcTooltip v-if="isEeUI && formViewData.logo_url" :disabled="isLocked">
                                 <template #title> {{ $t('general.delete') }} {{ $t('general.logo') }} </template>
@@ -1084,14 +1238,13 @@ useEventListener(
                                   class="nc-form-delete-logo-btn"
                                   data-testid="nc-form-delete-logo-btn"
                                   :disabled="isLocked"
-                                  @click="
-                              () => {
-                                if (isEditable) {
-                                  formViewData!.logo_url = null
-                                  updateView()
-                                }
-                              }
-                            "
+                                  @click.stop="
+                                    () => {
+                                      if (isEditable) {
+                                        formViewData!.logo_url = null
+                                        updateView()
+                                      }
+                                  }"
                                 >
                                   <div class="flex gap-2 items-center">
                                     <component :is="iconMap.delete" class="w-4 h-4" />
@@ -1185,6 +1338,7 @@ useEventListener(
                             :autofocus="activeRow === NcForm.subheading"
                             :data-testid="NcForm.subheading"
                             :data-title="NcForm.subheading"
+                            hide-mention
                             @update:value="updateView"
                             @focus="activeRow = NcForm.subheading"
                             @blur="activeRow = ''"
@@ -1202,6 +1356,7 @@ useEventListener(
 
                       <Draggable
                         ref="draggableRef"
+                        v-bind="getDraggableAutoScrollOptions({ scrollSensitivity: 100 })"
                         :model-value="visibleColumns"
                         item-key="fk_column_id"
                         draggable=".item"
@@ -1242,18 +1397,48 @@ useEventListener(
                             data-testid="nc-form-fields"
                             @click.stop="onFormItemClick(element)"
                           >
-                            <div v-if="activeRow === element.id" class="absolute -left-3 top-6">
-                              <NcButton
-                                type="primary"
-                                size="small"
-                                class="nc-form-field-drag-handler !cursor-move !p-1 !min-w-6 !h-auto !rounded"
-                              >
-                                <component
-                                  :is="iconMap.drag"
-                                  class="nc-form-field-drag-handler flex-none !h-4 !w-4 text-white font-bold"
-                                />
-                              </NcButton>
-                            </div>
+                            <template v-if="activeRow === element.id">
+                              <div class="absolute -left-3 top-6">
+                                <NcButton
+                                  type="primary"
+                                  size="small"
+                                  class="nc-form-field-drag-handler !cursor-move !p-1 !min-w-6 !h-auto !rounded"
+                                >
+                                  <component
+                                    :is="iconMap.drag"
+                                    class="nc-form-field-drag-handler flex-none !h-4 !w-4 text-white font-bold"
+                                  />
+                                </NcButton>
+                              </div>
+                              <div class="absolute right-1 top-1">
+                                <NcTooltip
+                                  :title="
+                                    isRequired(element, element.required)
+                                      ? $t('tooltip.youCantRemoveARequiredField')
+                                      : $t('tooltip.removeFromForm')
+                                  "
+                                >
+                                  <NcButton
+                                    type="link"
+                                    size="xsmall"
+                                    class="nc-form-field-hide !bg-transparent !h-6 !w-6"
+                                    :class="{
+                                      '!text-nc-content-gray-muted !hover:text-nc-content-brand': !isRequired(
+                                        element,
+                                        element.required,
+                                      ),
+                                    }"
+                                    icon-only
+                                    :disabled="isRequired(element, element.required)"
+                                    @click="showOrHideColumn(element, false, false)"
+                                  >
+                                    <template #icon>
+                                      <GeneralIcon icon="close" class="!w-4 !h-4" />
+                                    </template>
+                                  </NcButton>
+                                </NcTooltip>
+                              </div>
+                            </template>
                             <div class="flex items-center gap-3">
                               <NcTooltip
                                 v-if="allViewFilters[element.fk_column_id]?.length && !isLocked"
@@ -1261,7 +1446,7 @@ useEventListener(
                                 placement="topLeft"
                               >
                                 <template #title> Conditionally visible field </template>
-                                <Transition name="icon-fade">
+                                <Transition name="icon-fade" :duration="500">
                                   <GeneralIcon
                                     v-if="element?.visible"
                                     icon="eye"
@@ -1278,9 +1463,9 @@ useEventListener(
                                 <span data-testid="nc-form-input-label">
                                   {{ element.label || element.title }}
                                 </span>
-                                <span v-if="isRequired(element, element.required)" class="text-red-500 text-base leading-[18px]"
-                                  >&nbsp;*</span
-                                >
+                                <span v-if="isRequired(element, element.required)" class="text-red-500 text-base leading-[18px]">
+                                  &nbsp;*
+                                </span>
                               </div>
                             </div>
 
@@ -1352,11 +1537,11 @@ useEventListener(
                         <NcButton
                           type="secondary"
                           size="small"
-                          :disabled="!isUIAllowed('dataInsert') || !visibleColumns.length"
+                          :disabled="disableFormSubmit"
                           class="nc-form-clear nc-form-focus-element"
                           data-testid="nc-form-clear"
                           data-title="nc-form-clear"
-                          @click="clearForm"
+                          @click.stop="clearForm"
                         >
                           {{ $t('activity.clearForm') }}
                         </NcButton>
@@ -1364,11 +1549,12 @@ useEventListener(
                         <NcButton
                           type="primary"
                           size="small"
-                          :disabled="!isUIAllowed('dataInsert') || !visibleColumns.length"
+                          :disabled="disableFormSubmit"
+                          :loading="isFormSubmitting"
                           class="nc-form-submit nc-form-focus-element"
                           data-testid="nc-form-submit"
                           data-title="nc-form-submit"
-                          @click="submitForm"
+                          @click.stop="submitForm"
                         >
                           {{ $t('general.submit') }}
                         </NcButton>
@@ -1379,7 +1565,7 @@ useEventListener(
                       <a-divider class="!my-8" />
                       <!-- Nocodb Branding  -->
                       <div class="inline-block">
-                        <GeneralFormBranding />
+                        <GeneralFormBranding @click.stop />
                       </div>
                     </div>
                   </a-card>
@@ -1392,39 +1578,34 @@ useEventListener(
                 class="nc-form-right-panel h-full flex-grow max-w-full"
                 :class="{
                   'overflow-y-auto nc-form-scrollbar': activeField,
+                  'relative': isLocked,
                 }"
               >
                 <!-- Form Field settings -->
                 <div v-if="activeField && activeColumn" :key="activeField?.id" class="nc-form-field-right-panel">
                   <!-- Field header -->
-                  <div class="px-3 pt-4 pb-2 flex items-center justify-between border-b border-gray-200 font-medium">
-                    <div class="flex items-center">
-                      <div class="text-gray-600 font-medium cursor-pointer select-none hover:underline" @click="activeRow = ''">
-                        {{ $t('objects.viewType.form') }}
-                      </div>
-                      <div class="px-1.75 text-gray-500 text-xl font-normal">/</div>
-
-                      <div class="flex items-center pr-1 py-1.5 text-gray-800">
-                        <SmartsheetHeaderVirtualCellIcon
-                          v-if="isVirtualCol(activeField)"
-                          :column-meta="activeField"
-                          class="flex-none"
-                        />
-                        <SmartsheetHeaderCellIcon v-else :column-meta="activeField" class="flex-none" />
-
-                        <NcTooltip class="truncate max-w-[120px] text-sm font-semibold" show-on-truncate-only>
-                          <template #title>
-                            <div class="text-center">
-                              {{ activeField.title }}
-                            </div>
-                          </template>
-
-                          <span data-testid="nc-form-input-label">
-                            {{ activeField.title }}
-                          </span>
-                        </NcTooltip>
-                      </div>
+                  <div class="px-4 pt-4 pb-2 flex items-center border-b border-gray-200 font-medium">
+                    <div class="text-gray-600 font-medium cursor-pointer select-none hover:underline" @click="activeRow = ''">
+                      {{ $t('objects.viewType.form') }}
                     </div>
+                    <div class="px-1.75 text-gray-500 text-xl font-normal">/</div>
+
+                    <div class="flex items-center py-1.5">
+                      <SmartsheetHeaderIcon :column="activeField" class="text-nc-content-gray" />
+                    </div>
+
+                    <NcTooltip class="truncate flex-1 text-sm font-semibold pr-1" show-on-truncate-only>
+                      <template #title>
+                        <div class="text-center">
+                          {{ activeField.title }}
+                        </div>
+                      </template>
+
+                      <span data-testid="nc-form-input-label text-nc-content-gray">
+                        {{ activeField.title }}
+                      </span>
+                    </NcTooltip>
+
                     <div class="flex items-center space-x-2">
                       <a-dropdown
                         v-model:visible="dropdownStates.showEditColumn"
@@ -1462,6 +1643,14 @@ useEventListener(
                         "
                         @hide-field="showOrHideColumn(activeField, false, false)"
                       />
+                      <NcTooltip placement="topRight" class="nc-sidebar-toggle-btn">
+                        <template #title> {{ $t('activity.toggleSidebar') }}</template>
+                        <NcButton icon-only size="small" type="secondary" @click.stop="isSidebarVisible = !isSidebarVisible">
+                          <template #icon>
+                            <GeneralIcon icon="sidebar" class="w-4 h-4" />
+                          </template>
+                        </NcButton>
+                      </NcTooltip>
                     </div>
                   </div>
                   <!-- Field text -->
@@ -1472,7 +1661,7 @@ useEventListener(
 
                     <a-textarea
                       ref="focusLabel"
-                      :value="activeField.label || activeField.title"
+                      :value="activeFieldLabel"
                       :rows="1"
                       auto-size
                       hide-details
@@ -1480,6 +1669,7 @@ useEventListener(
                       data-testid="nc-form-input-label"
                       :placeholder="$t('msg.info.formInput')"
                       @focus="onFocusActiveFieldLabel"
+                      @blur="isFocusedFieldLabel = false"
                       @keydown.enter.prevent
                       @input="updateFieldTitle($event.target.value)"
                       @change="updateColMeta(activeField)"
@@ -1491,6 +1681,7 @@ useEventListener(
                       class="form-meta-input nc-form-input-help-text"
                       is-form-field
                       :hidden-bubble-menu-options="hiddenBubbleMenuOptions"
+                      hide-mention
                       data-testid="nc-form-input-help-text"
                       @update:value="updateActiveFieldDescription"
                     />
@@ -1503,43 +1694,48 @@ useEventListener(
                   <Splitpanes v-if="formViewData" horizontal class="nc-form-settings w-full nc-form-right-splitpane">
                     <Pane min-size="30" size="50" class="nc-form-right-splitpane-item p-4 flex flex-col space-y-4 !min-h-200px">
                       <div class="flex flex-wrap justify-between items-center gap-2">
-                        <div class="flex items-center gap-3">
-                          <div class="text-sm font-bold text-gray-800">
-                            {{ $t('objects.viewType.form') }} {{ $t('objects.fields') }}
-                          </div>
-                          <NcBadge color="border-gray-200">
-                            {{ visibleColumns.length }}/{{ localColumns.length }} {{ $t('objects.field') }}
-                          </NcBadge>
+                        <div class="text-sm font-bold text-gray-800">
+                          {{ $t('objects.viewType.form') }} {{ $t('objects.fields') }}
                         </div>
 
-                        <a-dropdown
-                          v-if="isUIAllowed('fieldAdd')"
-                          v-model:visible="dropdownStates.showAddColumn"
-                          :trigger="['click']"
-                          :disabled="isLocked"
-                          overlay-class-name="nc-dropdown-form-add-column"
-                          @visible-change="onVisibilityChange('showAddColumn')"
-                        >
-                          <NcButton type="secondary" size="small" class="nc-form-add-field" data-testid="nc-form-add-field">
-                            <div class="flex gap-2 items-center">
-                              <component :is="iconMap.plus" class="w-4 h-4" />
-                              <span> {{ $t('activity.addFieldFromFormView') }} </span>
-                            </div>
-                          </NcButton>
+                        <div class="flex items-center gap-2">
+                          <a-dropdown
+                            v-if="isUIAllowed('fieldAdd')"
+                            v-model:visible="dropdownStates.showAddColumn"
+                            :trigger="['click']"
+                            :disabled="isLocked"
+                            overlay-class-name="nc-dropdown-form-add-column"
+                            @visible-change="onVisibilityChange('showAddColumn')"
+                          >
+                            <NcButton type="secondary" size="small" class="nc-form-add-field" data-testid="nc-form-add-field">
+                              <div class="flex gap-2 items-center">
+                                <component :is="iconMap.plus" class="w-4 h-4" />
+                                <span> {{ $t('activity.addFieldFromFormView') }} </span>
+                              </div>
+                            </NcButton>
 
-                          <template #overlay>
-                            <div class="nc-edit-or-add-provider-wrapper">
-                              <LazySmartsheetColumnEditOrAddProvider
-                                v-if="dropdownStates.showAddColumn"
-                                ref="editOrAddProviderRef"
-                                @submit="addColumnCallback"
-                                @cancel="dropdownStates.showAddColumn = false"
-                                @click.stop
-                                @keydown.stop
-                              />
-                            </div>
-                          </template>
-                        </a-dropdown>
+                            <template #overlay>
+                              <div class="nc-edit-or-add-provider-wrapper">
+                                <LazySmartsheetColumnEditOrAddProvider
+                                  v-if="dropdownStates.showAddColumn"
+                                  ref="editOrAddProviderRef"
+                                  @submit="addColumnCallback"
+                                  @cancel="dropdownStates.showAddColumn = false"
+                                  @click.stop
+                                  @keydown.stop
+                                />
+                              </div>
+                            </template>
+                          </a-dropdown>
+                          <NcTooltip placement="topRight" class="nc-sidebar-toggle-btn">
+                            <template #title> {{ $t('activity.toggleSidebar') }}</template>
+                            <NcButton icon-only size="small" type="secondary" @click.stop="isSidebarVisible = !isSidebarVisible">
+                              <template #icon>
+                                <GeneralIcon icon="sidebar" class="w-4 h-4" />
+                              </template>
+                            </NcButton>
+                          </NcTooltip>
+                        </div>
                       </div>
 
                       <form autocomplete="off">
@@ -1575,25 +1771,31 @@ useEventListener(
                         <template v-if="localColumns.length">
                           <div
                             key="nc-form-show-all-fields"
-                            class="w-full flex items-center border-b-1 rounded-t-lg border-gray-200 bg-gray-50 sticky top-0 z-100"
+                            class="w-full flex items-center border-b-1 rounded-t-lg border-gray-200 bg-gray-50 sticky top-0 z-49"
                             data-testid="nc-form-show-all-fields"
                             @click.stop
                           >
-                            <div class="w-4 h-4 flex-none mx-2"></div>
-                            <div class="flex-1 flex flex-row items-center truncate cursor-pointer">
-                              <div class="flex-1 font-base my-1.5">{{ $t('activity.selectAllFields') }}</div>
+                            <div class="flex-none mx-2 text-nc-content-brand">
+                              {{ visibleColumns.length }}/{{ localColumns.length }} {{ $t('general.selected') }}
+                            </div>
+
+                            <div class="flex-1 flex items-center justify-end truncate">
                               <div class="flex items-center px-2">
-                                <a-switch
+                                <NcSwitch
                                   :checked="visibleColumns.length === localColumns.length"
                                   size="small"
                                   class="nc-switch"
                                   :disabled="isLocked"
+                                  placement="right"
                                   @change="handleAddOrRemoveAllColumns"
-                                />
+                                >
+                                  <div class="font-base my-1.5 select-none">{{ $t('activity.selectAllFields') }}</div>
+                                </NcSwitch>
                               </div>
                             </div>
                           </div>
                           <Draggable
+                            v-bind="getDraggableAutoScrollOptions({ scrollSensitivity: 50 })"
                             :list="localColumns"
                             item-key="id"
                             ghost-class="nc-form-field-ghost"
@@ -1624,12 +1826,8 @@ useEventListener(
                                     class="flex-1 flex items-center cursor-pointer max-w-[calc(100%_-_40px)]"
                                     @click.prevent="onFormItemClick(field, true)"
                                   >
-                                    <SmartsheetHeaderVirtualCellIcon
-                                      v-if="field && isVirtualCol(field)"
-                                      :column-meta="field"
-                                      class="!text-gray-600"
-                                    />
-                                    <SmartsheetHeaderCellIcon v-else :column-meta="field" class="!text-gray-600" />
+                                    <SmartsheetHeaderIcon :column="field" color="text-nc-content-gray-subtle" />
+
                                     <div class="flex-1 flex items-center justify-start max-w-[calc(100%_-_28px)]">
                                       <div class="w-full flex items-center">
                                         <div class="ml-1 inline-flex" :class="field.label?.trim() ? 'max-w-1/2' : 'max-w-[95%]'">
@@ -1643,7 +1841,7 @@ useEventListener(
                                           </NcTooltip>
                                         </div>
                                         <div
-                                          v-if="field.label?.trim()"
+                                          v-if="field.label?.trim() && field.title !== field.label?.trim()"
                                           class="truncate inline-flex text-xs font-normal text-gray-700"
                                         >
                                           <span>&nbsp;(</span>
@@ -1673,7 +1871,7 @@ useEventListener(
                                     class="flex"
                                     placement="topRight"
                                   >
-                                    <template #title> You can't hide a required field.</template>
+                                    <template #title> $t('tooltip.youCantHideARequiredField')</template>
                                     <a-switch
                                       :checked="!!field.show"
                                       :disabled="field.required || isLocked || !isEditable"
@@ -1733,36 +1931,51 @@ useEventListener(
                             </div>
                           </div>
 
-                          <div class="flex items-center justify-between gap-3">
-                            <!-- Hide NocoDB Branding -->
+                          <PaymentUpgradeBadgeProvider :feature="PlanFeatureTypes.FEATURE_HIDE_BRANDING">
+                            <template #default="{ click }">
+                              <div class="flex items-center justify-between gap-3">
+                                <!-- Hide NocoDB Branding -->
 
-                            <span>{{ $t('labels.hideNocodbBranding') }}</span>
+                                <span class="flex items-center gap-3">
+                                  {{ $t('labels.hideNocodbBranding') }}
 
-                            <a-switch
-                              v-if="isEeUI"
-                              v-e="[`a:form-view:hide-branding`]"
-                              :checked="parseProp(formViewData.meta)?.hide_branding"
-                              size="small"
-                              class="nc-form-hide-branding"
-                              data-testid="nc-form-hide-branding"
-                              :disabled="isLocked || !isEditable"
-                              @change="(value) => {
-                                  if (isLocked || !isEditable) return
+                                  <LazyPaymentUpgradeBadge
+                                    :feature="PlanFeatureTypes.FEATURE_HIDE_BRANDING"
+                                    :content="
+                                      $t('upgrade.upgradeToHideFormBrandingSubtitle', {
+                                        plan: getPlanTitle(PlanTitles.PLUS),
+                                      })
+                                    "
+                                  />
+                                </span>
 
-                                  (formViewData!.meta as Record<string,any>).hide_branding = value
-                                  updateView()
-                                }"
-                            />
+                                <a-switch
+                                  v-if="isEeUI"
+                                  v-e="[`a:form-view:hide-branding`]"
+                                  :checked="parseProp(formViewData.meta)?.hide_branding"
+                                  size="small"
+                                  class="nc-form-hide-branding"
+                                  data-testid="nc-form-hide-branding"
+                                  :disabled="isLocked || !isEditable"
+                                  @change="(value) => {
+                                    if (isLocked || !isEditable || click(PlanFeatureTypes.FEATURE_HIDE_BRANDING)) return
 
-                            <NcTooltip v-else placement="top">
-                              <template #title>
-                                <div class="text-center">
-                                  {{ $t('msg.info.thisFeatureIsOnlyAvailableInEnterpriseEdition') }}
-                                </div>
-                              </template>
-                              <a-switch :checked="false" size="small" :disabled="true" />
-                            </NcTooltip>
-                          </div>
+                                    (formViewData!.meta as Record<string,any>).hide_branding = value
+                                    updateView()
+                                  }"
+                                />
+
+                                <NcTooltip v-else placement="top">
+                                  <template #title>
+                                    <div class="text-center">
+                                      {{ $t('msg.info.thisFeatureIsOnlyAvailableInEnterpriseEdition') }}
+                                    </div>
+                                  </template>
+                                  <a-switch :checked="false" size="small" :disabled="true" />
+                                </NcTooltip>
+                              </div>
+                            </template>
+                          </PaymentUpgradeBadgeProvider>
                           <div class="flex items-center justify-between gap-3">
                             <!-- Hide Banner -->
                             <span>{{ $t('general.hide') }} {{ $t('general.banner') }}</span>
@@ -1792,19 +2005,43 @@ useEventListener(
 
                         <div class="flex flex-col gap-3">
                           <div class="flex flex-col gap-3">
-                            <div class="flex items-center justify-between gap-3">
-                              <!-- Redirect to URL -->
-                              <span>{{ $t('labels.redirectToUrl') }}</span>
-                              <a-switch
-                                v-model:checked="isOpenRedirectUrl"
-                                v-e="[`a:form-view:redirect-url`]"
-                                size="small"
-                                class="nc-form-checkbox-redirect-url"
-                                data-testid="nc-form-checkbox-redirect-url"
-                                :disabled="isLocked || !isEditable"
-                                @change="updateView"
-                              />
-                            </div>
+                            <PaymentUpgradeBadgeProvider :feature="PlanFeatureTypes.FEATURE_FORM_URL_REDIRECTION">
+                              <template #default="{ click }">
+                                <div class="flex items-center justify-between gap-3">
+                                  <!-- Redirect to URL -->
+
+                                  <span class="flex items-center gap-3">
+                                    {{ $t('labels.redirectToUrl') }}
+
+                                    <LazyPaymentUpgradeBadge
+                                      v-if="!isOpenRedirectUrl"
+                                      :feature="PlanFeatureTypes.FEATURE_FORM_URL_REDIRECTION"
+                                      :content="
+                                        $t('upgrade.upgradeToAddRedirectUrlSubtitle', {
+                                          plan: getPlanTitle(PlanTitles.PLUS),
+                                        })
+                                      "
+                                    />
+                                  </span>
+                                  <a-switch
+                                    v-e="[`a:form-view:redirect-url`]"
+                                    :checked="isOpenRedirectUrl"
+                                    size="small"
+                                    class="nc-form-checkbox-redirect-url"
+                                    data-testid="nc-form-checkbox-redirect-url"
+                                    :disabled="isLocked || !isEditable"
+                                    @change="
+                                      (value) => {
+                                        if (value && click(PlanFeatureTypes.FEATURE_FORM_URL_REDIRECTION)) return
+
+                                        isOpenRedirectUrl = !!value
+                                        updateView()
+                                      }
+                                    "
+                                  />
+                                </div>
+                              </template>
+                            </PaymentUpgradeBadgeProvider>
                             <div v-if="isOpenRedirectUrl" class="flex flex-col gap-2 max-w-[calc(100%_-_40px)]">
                               <a-form-item class="!my-0" v-bind="redirectLinkValidation">
                                 <a-input
@@ -1819,7 +2056,7 @@ useEventListener(
                               <div class="text-small leading-[18px] text-gray-400 pl-3">
                                 Use {record_id} to get ID of the newly created record.
                                 <a
-                                  href="https://docs.nocodb.com/views/view-types/form/#redirect-url"
+                                  href="https://nocodb.com/docs/product-docs/views/view-types/form#redirect-url"
                                   target="_blank"
                                   rel="noopener noreferrer"
                                   class="!no-underline !hover:underline"
@@ -1879,8 +2116,14 @@ useEventListener(
 
                         <!-- Show this message -->
                         <div v-if="!isOpenRedirectUrl" class="pb-10">
-                          <div class="text-gray-800 mb-2">
+                          <div class="text-gray-800 mb-2 flex items-center">
                             {{ $t('msg.info.formDisplayMessage') }}
+                            <NcTooltip>
+                              <template #title>
+                                Use column name/title for templated field instead of field label. For example: "Hello {Title}!"
+                              </template>
+                              <GeneralIcon icon="info" class="text-gray-400 ml-1" />
+                            </NcTooltip>
                           </div>
                           <a-form-item class="!my-0">
                             <LazyCellRichText
@@ -1889,6 +2132,7 @@ useEventListener(
                               class="nc-form-after-submit-msg editable"
                               is-form-field
                               :hidden-bubble-menu-options="hiddenBubbleMenuOptions"
+                              hide-mention
                               data-testid="nc-form-after-submit-msg"
                               @update:value="updateView" />
                             <LazyCellRichText
@@ -1904,6 +2148,10 @@ useEventListener(
                     </Pane>
                   </Splitpanes>
                 </template>
+
+                <div v-if="isLocked" class="absolute inset-0 bg-black/12 z-500 grid place-items-center px-6">
+                  <LazyDlgLockView />
+                </div>
               </div>
             </template>
           </SmartsheetFormLayout>
@@ -1911,7 +2159,7 @@ useEventListener(
       </div>
     </template>
     <div
-      v-if="user?.base_roles?.viewer || user?.base_roles?.commenter"
+      v-if="!showBaseAccessRequestOverlay && (user?.base_roles?.viewer || user?.base_roles?.commenter)"
       class="absolute inset-0 bg-black/40 z-500 grid place-items-center"
     >
       <div class="text-center bg-white px-6 py-8 rounded-xl max-w-lg">
@@ -1943,7 +2191,7 @@ useEventListener(
     }
   }
   &.layout-list {
-    @apply h-auto !pl-0 !py-1;
+    @apply h-auto !p-0;
   }
 
   &.nc-cell-geodata {
@@ -1953,21 +2201,36 @@ useEventListener(
     @apply !py-0 !pl-0 flex items-stretch;
   }
 
-  :deep(input) {
-    @apply !px-1;
+  &:not(.nc-cell-datetime) {
+    :deep(input) {
+      &:not(.ant-select-selection-search-input) {
+        @apply !px-1;
+      }
+    }
   }
+
   &.nc-cell-longtext {
     @apply p-0 h-auto;
   }
   &.nc-cell:not(.nc-cell-longtext) {
     @apply p-2;
   }
+
+  :deep(&.nc-cell:not(.nc-cell-longtext)) {
+    &.nc-cell-phonenumber,
+    &.nc-cell-email,
+    &.nc-cell-url {
+      .nc-cell-field.nc-cell-link-preview {
+        @apply px-3;
+      }
+    }
+  }
   &.nc-virtual-cell {
     @apply px-2 py-1 min-h-10;
   }
 
   &.nc-cell-json {
-    @apply h-auto;
+    @apply min-h-[38px] h-auto;
     & > div {
       @apply w-full;
     }
@@ -2042,7 +2305,7 @@ useEventListener(
   @apply !border-t-1 !border-gray-200 relative;
 
   &::before {
-    @apply content-[':::'] block h-4 leading-12px px-2 font-bold text-gray-800 border-1 border-gray-200 rounded bg-white absolute -top-2.5 z-100 left-[calc(50%_-_16px)];
+    @apply content-[':::'] block h-4 leading-12px px-2 font-bold text-gray-800 border-1 border-gray-200 rounded bg-white absolute -top-2.5 z-49 left-[calc(50%_-_16px)];
   }
 }
 
@@ -2081,32 +2344,6 @@ useEventListener(
       }
     }
   }
-}
-
-.icon-fade-enter-active,
-.icon-fade-leave-active {
-  transition: opacity 0.5s ease, transform 0.5s ease; /* Added scaling transition */
-  position: absolute;
-}
-
-.icon-fade-enter-from {
-  opacity: 0;
-  transform: scale(0.5); /* Start smaller and scale up */
-}
-
-.icon-fade-enter-to {
-  opacity: 1;
-  transform: scale(1); /* Scale to full size */
-}
-
-.icon-fade-leave-from {
-  opacity: 1;
-  transform: scale(1); /* Start at full size */
-}
-
-.icon-fade-leave-to {
-  opacity: 0;
-  transform: scale(0.5); /* Scale down and fade out */
 }
 </style>
 

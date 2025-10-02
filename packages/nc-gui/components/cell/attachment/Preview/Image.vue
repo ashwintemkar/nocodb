@@ -6,9 +6,14 @@ interface Props {
   alt?: string
   objectFit?: string
   controls?: boolean
+  isCellPreview?: boolean
+  imageClass?: string
 }
 
-const props = defineProps<Props>()
+const props = withDefaults(defineProps<Props>(), {
+  isCellPreview: true,
+  imageClass: '',
+})
 const emit = defineEmits(['error'])
 
 const index = ref(0)
@@ -26,7 +31,7 @@ const ZOOM_STEP = 0.5
 const transformStyle = computed(() => ({
   transform: `translate(${position.value.x}px, ${position.value.y}px) scale(${scale.value})`,
   transition: isDragging.value ? 'none' : 'transform 0.2s ease-out',
-  cursor: scale.value > 1 ? 'grab' : 'default',
+  cursor: scale.value > 1 ? 'grab' : '',
 }))
 
 const limitDrag = (x: number, y: number) => {
@@ -65,7 +70,7 @@ const zoom = (direction: 'in' | 'out') => {
 }
 
 const startDrag = (clientX: number, clientY: number) => {
-  if (scale.value <= 1) return
+  if (scale.value <= 1 || !props.isCellPreview) return
   isDragging.value = true
   startPos.value = {
     x: clientX - position.value.x,
@@ -74,7 +79,7 @@ const startDrag = (clientX: number, clientY: number) => {
 }
 
 const drag = (clientX: number, clientY: number) => {
-  if (!isDragging.value) return
+  if (!isDragging.value || !props.isCellPreview) return
   const newPosition = {
     x: clientX - startPos.value.x,
     y: clientY - startPos.value.y,
@@ -87,7 +92,7 @@ const stopDrag = () => {
 }
 
 const stopPropagationIfScaled = (e: MouseEvent | TouchEvent) => {
-  if (scale.value <= 1) return
+  if (scale.value <= 1 || !props.isCellPreview) return
   e.preventDefault()
   e.stopPropagation()
 }
@@ -102,6 +107,10 @@ const onMouseDown = (e: MouseEvent) => {
   startDrag(e.clientX, e.clientY)
 }
 const onTouchStart = (e: TouchEvent) => {
+  if (props.isCellPreview) {
+    e.preventDefault()
+  }
+
   stopPropagationIfScaled(e)
   startDrag(e.touches[0].clientX, e.touches[0].clientY)
 }
@@ -109,19 +118,27 @@ const onTouchStart = (e: TouchEvent) => {
 
 <template>
   <div class="relative h-full w-full">
-    <div ref="containerRef" class="h-full w-full overflow-hidden" @mousedown="onMouseDown" @touchstart.prevent="onTouchStart">
+    <div
+      ref="containerRef"
+      class="h-full w-full overflow-hidden"
+      :class="{
+        'flex items-center justify-center': index >= props.srcs?.length,
+      }"
+      @mousedown="onMouseDown"
+      @touchstart="onTouchStart"
+    >
       <img
         v-if="index < props.srcs?.length"
         ref="imageRef"
         :src="props.srcs[index]"
         :alt="props?.alt || ''"
         :style="transformStyle"
-        :class="{ '!object-contain': props.objectFit === 'contain' }"
+        :class="[imageClass, { '!object-contain': props.objectFit === 'contain' }]"
         class="m-auto h-full max-h-full w-auto nc-attachment-image object-cover origin-center"
         loading="lazy"
         @error="onError"
       />
-      <component :is="iconMap.imagePlaceholder" v-else />
+      <GeneralIcon v-else icon="ncFileTypeImage" class="flex-none w-6" />
     </div>
 
     <div v-if="controls" class="absolute mx-auto w-full bottom-4 flex items-center justify-center gap-2">

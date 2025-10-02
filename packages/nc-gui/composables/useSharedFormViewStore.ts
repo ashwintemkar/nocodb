@@ -10,7 +10,7 @@ import type {
   StringOrNullType,
   TableType,
 } from 'nocodb-sdk'
-import { RelationTypes, UITypes, isLinksOrLTAR, isSystemColumn, isVirtualCol } from 'nocodb-sdk'
+import { PermissionEntity, PermissionKey, RelationTypes, UITypes, isLinksOrLTAR, isSystemColumn, isVirtualCol } from 'nocodb-sdk'
 import { isString } from '@vue/shared'
 import { useTitle } from '@vueuse/core'
 import type { RuleObject } from 'ant-design-vue/es/form'
@@ -29,6 +29,8 @@ const [useProvideSharedFormStore, useSharedFormStore] = useInjectionState((share
 
   const { sharedView } = storeToRefs(useViewsStore())
 
+  const { blockAddNewRecord, showRecordPlanLimitExceededModal } = useEeConfig()
+
   provide(SharedViewPasswordInj, password)
 
   const sharedFormView = ref<FormType>()
@@ -45,9 +47,15 @@ const [useProvideSharedFormStore, useSharedFormStore] = useInjectionState((share
   const sharedViewMeta = ref<SharedViewMeta>({})
   const formResetHook = createEventHook<void>()
 
+  const { isMobileMode } = useGlobal()
+
   const { api, isLoading } = useApi()
 
   const { metas, setMeta, getMeta } = useMetas()
+
+  const worksapce = useWorkspace()
+
+  const { workspaces } = storeToRefs(worksapce)
 
   const baseStore = useBase()
   const { base, sqlUis } = storeToRefs(baseStore)
@@ -55,6 +63,8 @@ const [useProvideSharedFormStore, useSharedFormStore] = useInjectionState((share
   const basesStore = useBases()
 
   const { basesUser } = storeToRefs(basesStore)
+
+  const { isAllowed } = usePermissions()
 
   const { t } = useI18n()
 
@@ -69,6 +79,12 @@ const [useProvideSharedFormStore, useSharedFormStore] = useInjectionState((share
   const preFilledDefaultValueformState = ref<Record<string, any>>({})
 
   const allViewFilters = ref<Record<string, FilterType[]>>({})
+
+  const isAddingEmptyRowPermitted = computed(() =>
+    meta.value?.id
+      ? isAllowed(PermissionEntity.TABLE, meta.value.id, PermissionKey.TABLE_RECORD_ADD, { isFormView: true })
+      : true,
+  )
 
   const isValidRedirectUrl = computed(
     () => typeof sharedFormView.value?.redirect_url === 'string' && !!sharedFormView.value?.redirect_url?.trim(),
@@ -114,12 +130,16 @@ const [useProvideSharedFormStore, useSharedFormStore] = useInjectionState((share
       columns.value?.filter((col) => {
         const isVisible = col.show
 
-        return isVisible && supportedFields(col)
+        const isAllowedToEdit = col?.permissions?.isAllowedToEdit ?? true
+
+        return isVisible && supportedFields(col) && isAllowedToEdit
       }) || [],
   )
 
   function supportedFields(col: ColumnType) {
-    return !isSystemColumn(col) && col.uidt !== UITypes.SpecificDBType && (!isVirtualCol(col) || isLinksOrLTAR(col.uidt))
+    return (
+      !isSystemColumn(col) && col.uidt !== UITypes.SpecificDBType && !isAI(col) && (!isVirtualCol(col) || isLinksOrLTAR(col.uidt))
+    )
   }
 
   const loadSharedView = async () => {
@@ -132,6 +152,11 @@ const [useProvideSharedFormStore, useSharedFormStore] = useInjectionState((share
         },
       })
 
+      // Set workspace info if present
+      if (viewMeta?.workspace) {
+        workspaces.value.set(viewMeta.workspace.id, viewMeta.workspace)
+      }
+
       passwordDlg.value = false
 
       sharedView.value = viewMeta
@@ -139,54 +164,6 @@ const [useProvideSharedFormStore, useSharedFormStore] = useInjectionState((share
       meta.value = viewMeta.model
 
       loadAllviewFilters(Array.isArray(viewMeta?.filter?.children) ? viewMeta?.filter?.children : [])
-
-      const fieldById = (viewMeta.columns || []).reduce(
-        (o: Record<string, any>, f: Record<string, any>) => ({
-          ...o,
-          [f.fk_column_id]: f,
-        }),
-        {} as Record<string, FormColumnType>,
-      )
-
-      columns.value = (viewMeta.model?.columns || [])
-        .filter((c: ColumnType) => fieldById[c.id])
-        .map((c: ColumnType) => {
-          if (
-            !isSystemColumn(c) &&
-            !isVirtualCol(c) &&
-            !isAttachment(c) &&
-            c.uidt !== UITypes.SpecificDBType &&
-            c?.title &&
-            isValidValue(c?.cdf) &&
-            !/^\w+\(\)|CURRENT_TIMESTAMP$/.test(c.cdf)
-          ) {
-            const defaultValue = typeof c.cdf === 'string' ? c.cdf.replace(/^'|'$/g, '') : c.cdf
-            if ([UITypes.Number, UITypes.Duration, UITypes.Percent, UITypes.Currency, UITypes.Decimal].includes(c.uidt)) {
-              formState.value[c.title] = Number(defaultValue) || null
-              preFilledDefaultValueformState.value[c.title] = Number(defaultValue) || null
-            } else if (c.uidt === UITypes.Checkbox) {
-              if (['true', '1'].includes(String(defaultValue).toLowerCase())) {
-                formState.value[c.title] = true
-                preFilledDefaultValueformState.value[c.title] = true
-              } else if (['false', '0'].includes(String(defaultValue).toLowerCase())) {
-                formState.value[c.title] = false
-                preFilledDefaultValueformState.value[c.title] = false
-              }
-            } else {
-              formState.value[c.title] = defaultValue
-              preFilledDefaultValueformState.value[c.title] = defaultValue
-            }
-          }
-
-          return {
-            ...c,
-            order: fieldById[c.id].order || c.order,
-            visible: true,
-            meta: { ...parseProp(fieldById[c.id].meta), ...parseProp(c.meta) },
-            description: fieldById[c.id].description,
-          }
-        })
-        .sort((a: ColumnType, b: ColumnType) => (a.order ?? Infinity) - (b.order ?? Infinity))
 
       const _sharedViewMeta = (viewMeta as any).meta
       sharedViewMeta.value = isString(_sharedViewMeta) ? JSON.parse(_sharedViewMeta) : _sharedViewMeta
@@ -212,9 +189,68 @@ const [useProvideSharedFormStore, useSharedFormStore] = useInjectionState((share
         basesUser.value.set(viewMeta.base_id, viewMeta.users)
       }
 
+      const fieldById = (viewMeta.columns || []).reduce(
+        (o: Record<string, any>, f: Record<string, any>) => ({
+          ...o,
+          [f.fk_column_id]: f,
+        }),
+        {} as Record<string, FormColumnType>,
+      )
+
+      columns.value = (viewMeta.model?.columns || [])
+        .filter((c: ColumnType) => fieldById[c.id])
+        .map((c: ColumnType) => {
+          if (
+            !isSystemColumn(c) &&
+            !isVirtualCol(c) &&
+            !isAttachment(c) &&
+            c.uidt !== UITypes.SpecificDBType &&
+            c?.title &&
+            isValidValue(c?.cdf) &&
+            !/^\w+\(\)|CURRENT_TIMESTAMP$/.test(c.cdf)
+          ) {
+            const defaultValue = typeof c.cdf === 'string' ? c.cdf.replace(/^['"]|['"]$/g, '') : c.cdf
+            if ([UITypes.Number, UITypes.Duration, UITypes.Percent, UITypes.Currency, UITypes.Decimal].includes(c.uidt)) {
+              formState.value[c.title] = Number(defaultValue) || null
+              preFilledDefaultValueformState.value[c.title] = Number(defaultValue) || null
+            } else if (c.uidt === UITypes.Checkbox) {
+              if (['true', '1'].includes(String(defaultValue).toLowerCase())) {
+                formState.value[c.title] = true
+                preFilledDefaultValueformState.value[c.title] = true
+              } else if (['false', '0'].includes(String(defaultValue).toLowerCase())) {
+                formState.value[c.title] = false
+                preFilledDefaultValueformState.value[c.title] = false
+              }
+            } else {
+              formState.value[c.title] = defaultValue
+              preFilledDefaultValueformState.value[c.title] = defaultValue
+            }
+          }
+
+          return {
+            ...c,
+            readonly: !isAddingEmptyRowPermitted.value ? true : c?.readonly ?? false,
+            read_only: !isAddingEmptyRowPermitted.value ? true : c?.read_only ?? false,
+            order: fieldById[c.id].order || c.order,
+            visible: true,
+            meta: { ...parseProp(fieldById[c.id].meta), ...parseProp(c.meta) },
+            description: fieldById[c.id].description,
+            permissions: {
+              isAllowedToEdit: isAllowed(PermissionEntity.FIELD, c.id!, PermissionKey.RECORD_FIELD_EDIT, {
+                isFormView: true,
+              }),
+            },
+          }
+        })
+        .sort((a: ColumnType, b: ColumnType) => (a.order ?? Infinity) - (b.order ?? Infinity))
+
       await handlePreFillForm()
 
       checkFieldVisibility()
+
+      nextTick(() => {
+        showRecordPlanLimitExceededModal({ isSharedFormView: true, focusBtn: null })
+      })
     } catch (e: any) {
       const error = await extractSdkResponseErrorMsgv2(e)
 
@@ -318,6 +354,7 @@ const [useProvideSharedFormStore, useSharedFormStore] = useInjectionState((share
         col.title &&
         col.show &&
         col.visible &&
+        col.permissions?.isAllowedToEdit &&
         isRequired(col) &&
         formState.value[col.title] === undefined &&
         additionalState.value[col.title] === undefined
@@ -333,7 +370,7 @@ const [useProvideSharedFormStore, useSharedFormStore] = useInjectionState((share
       }
 
       // handle filter out conditionally hidden field data
-      if (!col.visible && col.title) {
+      if ((!col.visible || !col.permissions?.isAllowedToEdit) && col.title) {
         delete formState.value[col.title]
         delete additionalState.value[col.title]
       }
@@ -363,6 +400,9 @@ const [useProvideSharedFormStore, useSharedFormStore] = useInjectionState((share
   }
 
   const submitForm = async () => {
+    // If blockAddNewRecord is true that means we have to upgrade plan to add more records
+    if (blockAddNewRecord.value) return
+
     try {
       if (!(await validateAllFields())) {
         return
@@ -662,26 +702,63 @@ const [useProvideSharedFormStore, useSharedFormStore] = useInjectionState((share
 
   async function loadLinkedRecords(column: ColumnType, ids: string[]) {
     const relatedMeta = await getMeta((column.colOptions as LinkToAnotherRecordType)?.fk_related_model_id)
-    const pkCol = relatedMeta?.columns?.find((col) => col.pk)
-    const pvCol = relatedMeta?.columns?.find((col) => col.pv)
+
+    if (!relatedMeta) return []
+
+    // Extract necessary columns in a single loop
+    let attachmentCol: ColumnType | undefined
+    let pkCol: ColumnType | undefined
+    let pvCol: ColumnType | undefined
+
+    const requiredFieldsToLoad = new Set<string>()
+
+    for (const col of relatedMeta.columns || []) {
+      if (!pkCol && col.pk) {
+        pkCol = col
+      }
+
+      if (!pvCol && col.pv) {
+        pvCol = col
+      }
+
+      if (!attachmentCol && isAttachment(col)) {
+        attachmentCol = col
+      }
+
+      if (isSystemColumn(col) || isPrimary(col) || isLinksOrLTAR(col) || isAttachment(col)) continue
+
+      if (requiredFieldsToLoad.size < (isMobileMode.value ? 1 : 3)) {
+        requiredFieldsToLoad.add(col.title!)
+      }
+    }
+
+    // Add important fields
+    if (attachmentCol) requiredFieldsToLoad.add(attachmentCol.title!)
+    if (pkCol) requiredFieldsToLoad.add(pkCol.title!)
+    if (pvCol) requiredFieldsToLoad.add(pvCol.title!)
+
+    // If no primary key column or ids are empty, return early
+    if (!pkCol || ids.length === 0) return []
 
     return (
-      await api.public.dataRelationList(
-        route.params.viewId as string,
-        column.id,
-        {},
-        {
-          headers: {
-            'xc-password': password.value,
+      (
+        await api.public.dataRelationList(
+          route.params.viewId as string,
+          column.id,
+          {},
+          {
+            headers: {
+              'xc-password': password.value,
+            },
+            query: {
+              limit: Math.max(25, ids.length),
+              where: `(${pkCol.title},in,${ids.join(',')})`,
+              fields: Array.from(requiredFieldsToLoad),
+            },
           },
-          query: {
-            limit: Math.max(25, ids.length),
-            where: `(${pkCol.title},in,${ids.join(',')})`,
-            fields: [pkCol.title, pvCol.title],
-          },
-        },
-      )
-    )?.list
+        )
+      )?.list || []
+    )
   }
 
   let intvl: NodeJS.Timeout
@@ -811,6 +888,7 @@ const [useProvideSharedFormStore, useSharedFormStore] = useInjectionState((share
     isValidRedirectUrl,
     loadAllviewFilters,
     checkFieldVisibility,
+    isAddingEmptyRowPermitted,
   }
 }, 'shared-form-view-store')
 

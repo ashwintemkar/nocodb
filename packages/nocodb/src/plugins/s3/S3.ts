@@ -3,10 +3,11 @@ import { Upload } from '@aws-sdk/lib-storage';
 import type { S3ClientConfig } from '@aws-sdk/client-s3';
 import type { IStorageAdapterV2 } from '~/types/nc-plugin';
 import GenericS3 from '~/plugins/GenericS3/GenericS3';
+import { S3_PATCH_KEYS } from '~/constants';
 
 interface S3Input {
   bucket: string;
-  region: string;
+  region?: string;
   access_key?: string;
   access_secret?: string;
   endpoint?: string;
@@ -36,8 +37,7 @@ export default class S3 extends GenericS3 implements IStorageAdapterV2 {
     }
 
     if (
-      key.startsWith(`${this.input.bucket}/nc/uploads`) ||
-      key.startsWith(`${this.input.bucket}/nc/thumbnails`)
+      S3_PATCH_KEYS.some((k) => key.startsWith(`${this.input.bucket}/nc/${k}`))
     ) {
       key = key.replace(`${this.input.bucket}/`, '');
     }
@@ -91,5 +91,14 @@ export default class S3 extends GenericS3 implements IStorageAdapterV2 {
       console.error(error);
       throw error;
     }
+  }
+
+  override getUploadedPath(path: string): { path?: string; url?: string } {
+    const usePath = path.startsWith('/') ? path.replace(/$\/+/, '') : path;
+    // TODO: more configurable urls, like using path-styles and CNAME
+    // https://docs.aws.amazon.com/AmazonS3/latest/userguide/VirtualHosting.html
+    return {
+      url: `https://${this.input.bucket}.s3.${this.input.region}.amazonaws.com/${usePath}`,
+    };
   }
 }

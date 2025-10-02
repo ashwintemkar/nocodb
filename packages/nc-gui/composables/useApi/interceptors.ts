@@ -1,23 +1,23 @@
 import type { Api } from 'nocodb-sdk'
 const DbNotFoundMsg = 'Database config not found'
 
-export function addAxiosInterceptors(api: Api<any>) {
+const TIMEOUT_RETRY_COUNT = 1
+
+export function addAxiosInterceptors(api: Api<any>, skipSocket = false) {
   const state = useGlobal()
   const router = useRouter()
   const route = router.currentRoute
   const optimisedQuery = useState('optimisedQuery', () => true)
+  const { $ncSocket } = useNuxtApp()
 
   const axiosInstance = api.instance
 
   axiosInstance.interceptors.request.use((config) => {
     config.headers['xc-gui'] = 'true'
+    config.headers['xc-socket-id'] = skipSocket ? null : $ncSocket.id() || null
 
     if (state.token.value && !config.headers['xc-short-token']) {
       config.headers['xc-auth'] = state.token.value
-    }
-
-    if (!config.url?.endsWith('/user/me') && !config.url?.endsWith('/admin/roles') && state.previewAs?.value) {
-      config.headers['xc-preview'] = state.previewAs.value
     }
 
     if (!config.url?.endsWith('/user/me') && !config.url?.endsWith('/admin/roles')) {
@@ -61,37 +61,44 @@ export function addAxiosInterceptors(api: Api<any>) {
         return Promise.reject(error)
       }
 
-      try {
-        const token = await state.refreshToken({
-          axiosInstance,
-          skipLogout: true,
-        })
-
-        if (!token) {
-          await state.signOut({
-            redirectToSignin: !isSharedPage,
-            skipApiCall: true,
+      let retry = 0
+      do {
+        try {
+          const token = await state.refreshToken({
+            axiosInstance,
+            skipLogout: true,
           })
-          return Promise.reject(error)
+
+          if (!token) {
+            await state.signOut({
+              redirectToSignin: !isSharedPage,
+              skipApiCall: true,
+            })
+            return Promise.reject(error)
+          }
+
+          const config = error.config
+          config.headers['xc-auth'] = token
+
+          const response = await axiosInstance.request(config)
+          return response
+        } catch (refreshTokenError) {
+          if ((refreshTokenError as any)?.code === 'ERR_CANCELED') {
+            return Promise.reject(refreshTokenError)
+          }
+
+          // if shared execution error, don't sign out
+          if (!(refreshTokenError instanceof SharedExecutionError)) {
+            await state.signOut({
+              redirectToSignin: !isSharedPage,
+              skipApiCall: true,
+            })
+            return Promise.reject(error)
+          }
+
+          if (retry >= TIMEOUT_RETRY_COUNT) return Promise.reject(error)
         }
-
-        const config = error.config
-        config.headers['xc-auth'] = token
-
-        const response = await axiosInstance.request(config)
-        return response
-      } catch (refreshTokenError) {
-        if ((refreshTokenError as any)?.code === 'ERR_CANCELED') {
-          return Promise.reject(refreshTokenError)
-        }
-
-        await state.signOut({
-          redirectToSignin: !isSharedPage,
-          skipApiCall: true,
-        })
-
-        return Promise.reject(error)
-      }
+      } while (retry++ < TIMEOUT_RETRY_COUNT)
     },
   )
 

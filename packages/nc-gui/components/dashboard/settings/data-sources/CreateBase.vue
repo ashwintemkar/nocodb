@@ -1,5 +1,5 @@
 <script lang="ts" setup>
-import { Form, message } from 'ant-design-vue'
+import { Form } from 'ant-design-vue'
 import { type IntegrationType, validateAndExtractSSLProp } from 'nocodb-sdk'
 import {
   ClientType,
@@ -29,6 +29,8 @@ const { refreshCommandPalette } = useCommandPalette()
 
 const _projectId = inject(ProjectIdInj, undefined)
 const baseId = computed(() => _projectId?.value ?? base.value?.id)
+
+const filteredIntegrations = computed(() => integrations.value.filter((i) => i.sub_type !== SyncDataType.NOCODB))
 
 const useForm = Form.useForm
 
@@ -117,7 +119,6 @@ const validators = computed(() => {
       }
       break
     case ClientType.PG:
-    case ClientType.MSSQL:
       clientValidations['dataSource.searchPath.0'] = selectedIntegration.value ? [] : [fieldRequiredValidator()]
       break
   }
@@ -419,6 +420,7 @@ function handleAutoScroll(scroll: boolean, className: string) {
 }
 
 const filterIntegrationCategory = (c: IntegrationCategoryItemType) => [IntegrationCategoryType.DATABASE].includes(c.value)
+const filterIntegration = (i: IntegrationItemType) => i.sub_type !== SyncDataType.NOCODB && i.isAvailable
 
 const isIntgrationDisabled = (integration: IntegrationType = {}) => {
   switch (integration.sub_type) {
@@ -533,7 +535,7 @@ const isIntgrationDisabled = (integration: IntegrationType = {}) => {
                           @change="changeIntegration()"
                         >
                           <a-select-option
-                            v-for="integration in integrations"
+                            v-for="integration in filteredIntegrations"
                             :key="integration.id"
                             :value="integration.id"
                             :disabled="isIntgrationDisabled(integration).isDisabled"
@@ -656,8 +658,8 @@ const isIntgrationDisabled = (integration: IntegrationType = {}) => {
                           <!-- Schema name -->
                           <a-form-item
                             v-if="
-                              ([ClientType.MSSQL, ClientType.PG].includes(formState.dataSource.client) ||
-                                [ClientType.MSSQL, ClientType.PG].includes(selectedIntegration?.sub_type)) &&
+                              ([ClientType.PG].includes(formState.dataSource.client) ||
+                                [ClientType.PG].includes(selectedIntegration?.sub_type)) &&
                               formState.dataSource.searchPath
                             "
                             :label="$t('labels.schemaName')"
@@ -678,8 +680,8 @@ const isIntgrationDisabled = (integration: IntegrationType = {}) => {
                   <div class="nc-form-section-title">Permissions</div>
                   <div class="nc-form-section-body">
                     <DashboardSettingsDataSourcesSourceRestrictions
-                      v-model:allowMetaWrite="allowMetaWrite"
-                      v-model:allowDataWrite="allowDataWrite"
+                      v-model:allow-meta-write="allowMetaWrite"
+                      v-model:allow-data-write="allowDataWrite"
                     />
                   </div>
                 </div>
@@ -746,7 +748,11 @@ const isIntgrationDisabled = (integration: IntegrationType = {}) => {
               </div>
             </a-form>
 
-            <WorkspaceIntegrationsTab is-modal :filter-category="filterIntegrationCategory" />
+            <WorkspaceIntegrationsTab
+              is-modal
+              :filter-category="filterIntegrationCategory"
+              :filter-integration="filterIntegration"
+            />
             <WorkspaceIntegrationsEditOrAdd load-datasource-info :base-id="baseId" />
           </div>
           <general-overlay :model-value="isLoading" inline transition class="!bg-opacity-15">

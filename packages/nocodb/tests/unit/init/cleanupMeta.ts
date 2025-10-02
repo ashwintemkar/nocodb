@@ -1,6 +1,7 @@
 import TestDbMngr from '../TestDbMngr';
 import { Base, Model } from '~/models';
 import NcConnectionMgrv2 from '~/utils/common/NcConnectionMgrv2';
+import NocoCache from '~/cache/NocoCache';
 import { MetaTable, orderedMetaTables, RootScopes } from '~/utils/globals';
 import Noco from '~/Noco';
 
@@ -41,11 +42,15 @@ const dropTablesAllNonExternalProjects = async () => {
   await TestDbMngr.disableForeignKeyChecks(TestDbMngr.metaKnex);
 
   for (const tableName of userCreatedTableNames) {
-    if (TestDbMngr.isPg()) {
-      await TestDbMngr.metaKnex.raw(`DROP TABLE "${tableName}" CASCADE`);
-    } else {
-      await TestDbMngr.metaKnex.raw(`DROP TABLE ${tableName}`);
-    }
+    try {
+      if (TestDbMngr.isPg()) {
+        await TestDbMngr.metaKnex.raw(
+          `DROP TABLE IF EXISTS "${tableName}" CASCADE`,
+        );
+      } else {
+        await TestDbMngr.metaKnex.raw(`DROP TABLE ${tableName}`);
+      }
+    } catch(ex) {}
   }
 
   await TestDbMngr.enableForeignKeyChecks(TestDbMngr.metaKnex);
@@ -59,6 +64,7 @@ const cleanupMetaTables = async () => {
     } catch (e) {}
   }
   await TestDbMngr.enableForeignKeyChecks(TestDbMngr.metaKnex);
+  await NocoCache.destroy();
 };
 
 export default async function () {

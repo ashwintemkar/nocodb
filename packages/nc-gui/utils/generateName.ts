@@ -29,8 +29,8 @@ export const generateUniqueTitle = <T extends Record<string, any> = Record<strin
   title: string,
   arr: T[],
   predicate: keyof T,
-  splitOperator: string = '-',
-  startFromZero: boolean = false,
+  splitOperator = '-',
+  startFromZero = false,
 ) => {
   // If we start from zero and the title is not already in the array, return the title as is.
   if (startFromZero && !arr.map((item) => item[predicate]).includes(title as T[keyof T])) {
@@ -51,4 +51,8 @@ export const generateUniqueTitle = <T extends Record<string, any> = Record<strin
 
 export const generateRandomNumber = () => {
   return window.crypto.getRandomValues(new Uint8Array(10)).join('')
+}
+
+export const generateRandomUUID = () => {
+  return window.crypto.randomUUID()
 }

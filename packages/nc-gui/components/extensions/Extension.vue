@@ -2,15 +2,16 @@
 interface Prop {
   extensionId: string
   error?: any
+  clearError?: () => void
 }
 
-const { extensionId, error } = defineProps<Prop>()
+const props = defineProps<Prop>()
 
 const { extensionList, extensionsLoaded, availableExtensions } = useExtensions()
 
-const isLoadedExtension = ref<boolean>(true)
+const activeError = toRef(props, 'error')
 
-const activeError = ref(error)
+const isLoadedExtension = ref<boolean>(true)
 
 const extensionRef = ref<HTMLElement>()
 
@@ -19,7 +20,7 @@ const extensionModalRef = ref<HTMLElement>()
 const isMouseDown = ref(false)
 
 const extension = computed(() => {
-  const ext = extensionList.value.find((ext) => ext.id === extensionId)
+  const ext = extensionList.value.find((ext) => ext.id === props.extensionId)
   if (!ext) {
     throw new Error('Extension not found')
   }
@@ -29,6 +30,10 @@ const extension = computed(() => {
 const extensionManifest = computed<ExtensionManifest | undefined>(() => {
   return availableExtensions.value.find((ext) => ext.id === extension.value?.extensionId)
 })
+
+const activeExtensionId = computed(() => extensionManifest.value?.id ?? '')
+
+provide(ExtensionConfigInj, ref({ activeExtensionId }))
 
 const {
   fullscreen,
@@ -59,6 +64,11 @@ const closeFullscreen = (e: MouseEvent) => {
   }
 }
 
+const onClearData = () => {
+  extension.value.clear()
+  props.clearError?.()
+}
+
 onMounted(() => {
   until(extensionsLoaded)
     .toMatch((v) => v)
@@ -73,16 +83,16 @@ onMounted(() => {
           isLoadedExtension.value = false
         })
         .catch((e) => {
+          isLoadedExtension.value = false
           throw new Error(e)
         })
     })
     .catch((err) => {
       if (!extensionManifest.value) {
-        activeError.value = 'There was an error loading the extension'
-        return
+        throw new Error('There was an error loading the extension')
       }
-      activeError.value = err
       isLoadedExtension.value = false
+      throw new Error(err)
     })
 })
 
@@ -98,6 +108,25 @@ useEventListener('keydown', (e) => {
     fullscreen.value = false
   }
 })
+
+const noExplicitHeightExtensions = ['nc-data-exporter']
+
+const isNoExplicitHeightExtension = computed(() => noExplicitHeightExtensions.includes(extension.value.extensionId))
+
+/**
+ * Log extension error so that we can debug easily.
+ */
+watch(
+  activeError,
+  (newVal) => {
+    if (!newVal) return
+
+    console.error(newVal)
+  },
+  {
+    immediate: true,
+  },
+)
 </script>
 
 <template>
@@ -114,7 +143,7 @@ useEventListener('keydown', (e) => {
       :style="
         !collapsed
           ? {
-              height: extensionHeight,
+              height: isNoExplicitHeightExtension ? '100%' : extensionHeight,
               minHeight: extensionManifest?.config?.contentMinHeight,
             }
           : {}
@@ -135,7 +164,7 @@ useEventListener('keydown', (e) => {
           <a-result status="error" title="Extension Error" class="nc-extension-error">
             <template #subTitle>{{ activeError }}</template>
             <template #extra>
-              <NcButton size="small" @click="extension.clear()">
+              <NcButton size="small" @click="onClearData">
                 <div class="flex items-center gap-2">
                   <GeneralIcon icon="reload" />
                   Clear Data
@@ -162,7 +191,11 @@ useEventListener('keydown', (e) => {
             @click="closeFullscreen"
           >
             <div
-              :class="{ 'extension-modal-content': fullscreen, 'h-full': !fullscreen }"
+              :class="{
+                'extension-modal-content': fullscreen,
+                'h-full': !fullscreen,
+                '!nc-h-screen !nc-w-screen': fullscreen && currentExtensionModalSize === 'fullscreen',
+              }"
               :style="
                 fullscreen
                   ? {
@@ -196,6 +229,7 @@ useEventListener('keydown', (e) => {
 <style scoped lang="scss">
 .extension-wrapper {
   @apply bg-white rounded-xl w-full border-1 relative;
+  box-shadow: 0px 0px 8px 0px rgba(0, 0, 0, 0.08);
 
   &.isOpen {
     resize: vertical;

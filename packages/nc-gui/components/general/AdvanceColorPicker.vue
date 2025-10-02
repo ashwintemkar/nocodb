@@ -6,6 +6,7 @@ import { themeV3Colors } from '../../utils/colorsUtils'
 interface Props {
   modelValue?: string | any
   isOpen?: boolean
+  includeBlackAndWhiteAsDefaultColors?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -56,8 +57,10 @@ const localIsDefaultColorTab = ref<'true' | 'false'>('true')
 
 const isDefaultColorTab = computed({
   get: () => {
+    const colorGrps = [...defaultColors.value]
+    if (props.includeBlackAndWhiteAsDefaultColors) colorGrps.push(['#000000', '#ffffff'])
     if (showActiveColorTab.value && vModel.value) {
-      for (const colorGrp of defaultColors.value) {
+      for (const colorGrp of colorGrps) {
         if (colorGrp.includes(vModel.value)) {
           return 'true'
         }
@@ -109,10 +112,10 @@ watch(
 
 <template>
   <div class="nc-advance-color-picker w-[336px] pt-2" click.stop>
-    <NcTabs v-model:activeKey="isDefaultColorTab" class="nc-advance-color-picker-tab w-full">
+    <NcTabs v-model:active-key="isDefaultColorTab" class="nc-advance-color-picker-tab w-full">
       <a-tab-pane key="true">
         <template #tab>
-          <div class="tab" data-testid="nc-default-colors-tab">Default colors</div>
+          <div class="tab" data-testid="nc-default-colors-tab">{{ $t('labels.defaultColours') }}</div>
         </template>
         <div class="h-full p-2">
           <div class="flex flex-col gap-1">
@@ -134,7 +137,7 @@ watch(
       <a-tab-pane key="false">
         <template #tab>
           <div class="tab" data-testid="nc-custom-colors-tab">
-            <div>Custom colours</div>
+            <div>{{ $t('labels.customColours') }}</div>
           </div>
         </template>
         <div class="h-full p-2">

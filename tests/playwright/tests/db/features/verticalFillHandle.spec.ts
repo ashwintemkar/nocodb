@@ -46,7 +46,7 @@ async function beforeEachInit({ page, tableType }: { page: any; tableType: strin
   const table = await createDemoTable({ context, type: tableType, recordCnt: 10 });
   await page.reload();
 
-  await dashboard.treeView.openTable({ title: tableType });
+  await dashboard.treeView.openTable({ title: tableType, baseTitle: context.base.title });
 
   return { dashboard, context, api, table } as paramsType;
 }
@@ -223,11 +223,11 @@ test.describe('Fill Handle', () => {
   test('Miscellaneous (Checkbox, attachment)', async () => {
     const fields = [
       { title: 'Checkbox', value: 'true', type: 'checkbox' },
-      { title: 'Attachment', value: `${process.cwd()}/fixtures/sampleFiles/1.json`, type: 'attachment' },
+      { title: 'Attachment', value: `${__dirname}/../../../fixtures/sampleFiles/1.json`, type: 'attachment' },
     ];
 
     await p.dashboard.grid.cell.checkbox.click({ index: 0, columnHeader: 'Checkbox' });
-    const filepath = [`${process.cwd()}/fixtures/sampleFiles/1.json`];
+    const filepath = [`${__dirname}/../../../fixtures/sampleFiles/1.json`];
     await p.dashboard.grid.cell.attachment.addFile({
       index: 0,
       columnHeader: 'Attachment',

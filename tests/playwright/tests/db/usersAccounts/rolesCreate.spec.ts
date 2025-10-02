@@ -57,7 +57,7 @@ test.describe.skip('User roles', () => {
       role: roleDb[roleIdx].role,
     });
 
-    await dashboard.treeView.openTable({ title: 'Country' });
+    await dashboard.treeView.openTable({ title: 'Country', baseTitle: context.base.title });
 
     await dashboard.viewSidebar.validateRoleAccess({
       role: roleDb[roleIdx].role,
@@ -112,11 +112,10 @@ test.describe.skip('User roles', () => {
       password: getDefaultPwd(),
     });
 
-    await workspacePage.baseOpen({ title: context.base.title });
+    // await workspacePage.baseOpen({ title: context.base.title }); //??
 
     // close 'Team & Auth' tab
     if (roleDb[roleIdx].role === 'creator') {
-      await dashboard.closeTab({ title: 'Team & Auth' });
     }
   }
 });

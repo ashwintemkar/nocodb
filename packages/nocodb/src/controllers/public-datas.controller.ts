@@ -91,6 +91,19 @@ export class PublicDatasController {
     });
   }
 
+  @Get(['/api/v2/public/shared-view/:sharedViewUuid/groupby/count'])
+  async dataGroupByCount(
+    @TenantContext() context: NcContext,
+    @Req() req: NcRequest,
+    @Param('sharedViewUuid') sharedViewUuid: string,
+  ) {
+    return await this.publicDatasService.dataGroupByCount(context, {
+      query: req.query,
+      password: req.headers?.['xc-password'] as string,
+      sharedViewUuid: sharedViewUuid,
+    });
+  }
+
   @Get([
     '/api/v1/db/public/shared-view/:sharedViewUuid/group/:columnId',
     '/api/v2/public/shared-view/:sharedViewUuid/group/:columnId',
@@ -127,6 +140,7 @@ export class PublicDatasController {
       body: req.body?.data,
       siteUrl: (req as any).ncSiteUrl,
       files: req.files as any[],
+      req,
     });
 
     return insertResult;

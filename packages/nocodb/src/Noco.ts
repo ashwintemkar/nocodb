@@ -1,23 +1,36 @@
+import '~/instrument';
 import path from 'path';
 import { NestFactory } from '@nestjs/core';
 import clear from 'clear';
 import * as express from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import dotenv from 'dotenv';
-import { IoAdapter } from '@nestjs/platform-socket.io';
 import requestIp from 'request-ip';
 import cookieParser from 'cookie-parser';
+import { NcDebug } from 'nc-gui/utils/debug';
+import { definePDFJSModule } from 'unpdf';
 import type { INestApplication } from '@nestjs/common';
 import type { MetaService } from '~/meta/meta.service';
 import type { IEventEmitter } from '~/modules/event-emitter/event-emitter.interface';
 import type { Express } from 'express';
 import type http from 'http';
 import type Sharp from 'sharp';
+import type { AppHooksService } from '~/services/app-hooks/app-hooks.service';
+import type { AuditService } from '~/meta/audit.service';
 import { MetaTable, RootScopes } from '~/utils/globals';
 import { AppModule } from '~/app.module';
 import { isEE, T } from '~/utils';
+import { getAppUrl } from '~/utils/appUrl';
+import { DataReflection, Integration } from '~/models';
+import { getRedisURL } from '~/helpers/redisHelpers';
+import { RedisIoAdapter } from '~/gateways/RedisIoAdapter';
 
 dotenv.config();
+declare const module: any;
+
+if (['development', 'test'].includes(process.env.NODE_ENV)) {
+  require('source-map-support').install();
+}
 
 export default class Noco {
   protected static _this: Noco;
@@ -27,9 +40,7 @@ export default class Noco {
   protected static _server: Express;
 
   public static get dashboardUrl(): string {
-    const siteUrl = `http://localhost:${process.env.PORT || 8080}`;
-
-    return `${siteUrl}${this._this?.config?.dashboardPath}`;
+    return getAppUrl();
   }
 
   public static config: any;
@@ -37,14 +48,19 @@ export default class Noco {
   public readonly router: express.Router;
   public readonly baseRouter: express.Router;
   public static _ncMeta: any;
+  public static _ncAudit: any;
+  public static appHooksService: AppHooksService;
   public readonly metaMgr: any;
   public readonly metaMgrv2: any;
   public env: string;
+  protected static _nestApp: INestApplication;
 
   protected config: any;
   protected requestContext: any;
 
   public static sharp: typeof Sharp;
+  public static canvas: any;
+  public static isPdfjsInitialized: boolean;
 
   constructor() {
     process.env.PORT = process.env.PORT || '8080';
@@ -77,8 +93,20 @@ export default class Noco {
     return this._ncMeta;
   }
 
+  public static get nestApp() {
+    return this._nestApp;
+  }
+
+  public static get ncAudit(): AuditService {
+    return this._ncAudit ?? this._ncMeta;
+  }
+
   public get ncMeta(): any {
     return Noco._ncMeta;
+  }
+
+  public get ncAudit(): AuditService {
+    return Noco._ncAudit;
   }
 
   public static getConfig(): any {
@@ -99,26 +127,48 @@ export default class Noco {
   static async init(param: any, httpServer: http.Server, server: Express) {
     const nestApp = await NestFactory.create(AppModule, {
       bufferLogs: true,
+      bodyParser: false,
     });
+
+    Noco._nestApp = nestApp;
+
     this.initCustomLogger(nestApp);
+    NcDebug.log('Custom logger initialized');
     nestApp.flushLogs();
+
+    if ((module as any)?.hot) {
+      (module as any).hot?.accept?.();
+      (module as any).hot?.dispose?.(() => nestApp.close());
+    }
 
     try {
       this.sharp = (await import('sharp')).default;
+
+      this.sharp.concurrency(1);
+      this.sharp.cache(false);
     } catch {
       console.error(
         'Sharp is not available for your platform, thumbnail generation will be skipped',
       );
     }
 
+    try {
+      this.canvas = await import('@napi-rs/canvas');
+      await definePDFJSModule(() => import('pdfjs-dist/legacy/build/pdf.mjs'));
+      this.isPdfjsInitialized = true;
+    } catch (e) {
+      console.error(e);
+      console.error(
+        'Canvas is not available for your platform, thumbnail generation will be skipped',
+      );
+    }
+
     if (process.env.NC_WORKER_CONTAINER === 'true') {
-      if (!process.env.NC_REDIS_URL) {
+      if (!getRedisURL()) {
         throw new Error('NC_REDIS_URL is required');
       }
       process.env.NC_DISABLE_TELE = 'true';
     }
-
-    nestApp.useWebSocketAdapter(new IoAdapter(httpServer));
 
     this._httpServer = nestApp.getHttpAdapter().getInstance();
     this._server = server;
@@ -126,19 +176,29 @@ export default class Noco {
     nestApp.use(requestIp.mw());
     nestApp.use(cookieParser());
 
-    nestApp.useWebSocketAdapter(new IoAdapter(httpServer));
-
-    nestApp.use(
-      express.json({ limit: process.env.NC_REQUEST_BODY_SIZE || '50mb' }),
-    );
+    const redisIoAdapter = new RedisIoAdapter(httpServer);
+    await redisIoAdapter.connectToRedis();
+    nestApp.useWebSocketAdapter(redisIoAdapter);
+    NcDebug.log('Websocket adapter initialized');
 
     await nestApp.init();
+    NcDebug.log('Nest app initialized');
+
+    await nestApp.enableShutdownHooks();
+    NcDebug.log('Shutdown hooks enabled');
 
     const dashboardPath = process.env.NC_DASHBOARD_URL ?? '/dashboard';
     server.use(express.static(path.join(__dirname, 'public')));
 
     if (dashboardPath !== '/' && dashboardPath !== '') {
       server.get('/', (_req, res) => res.redirect(dashboardPath));
+    }
+
+    await Integration.init();
+    NcDebug.log('Integration initialized');
+
+    if (process.env.NC_WORKER_CONTAINER !== 'true') {
+      await DataReflection.init();
     }
 
     return nestApp.getHttpAdapter().getInstance();
@@ -214,4 +274,6 @@ export default class Noco {
   protected static initCustomLogger(_nestApp: INestApplication<any>) {
     // setup custom logger for nestjs if needed
   }
+
+  public static async prepareAuditService() {}
 }

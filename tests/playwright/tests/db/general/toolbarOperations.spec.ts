@@ -30,7 +30,7 @@ test.describe('Toolbar operations (GRID)', () => {
   test('Create a GroupBy and Verify With Sort, Filter, Hide', async () => {
     if (enableQuickRun()) test.skip();
     // Open Table
-    await dashboard.treeView.openTable({ title: 'Film' });
+    await dashboard.treeView.openTable({ title: 'Film', baseTitle: context.base.title });
 
     // GroupBy Category Descending Order
     await toolbar.groupBy.add({ title: 'Length', ascending: false, locallySaved: false });
@@ -156,7 +156,7 @@ test.describe('Toolbar operations (GRID)', () => {
   test('Create Two GroupBy and Verify With Sort, Filter, Hide', async () => {
     if (enableQuickRun()) test.skip();
     // Open Table
-    await dashboard.treeView.openTable({ title: 'Film' });
+    await dashboard.treeView.openTable({ title: 'Film', baseTitle: context.base.title });
 
     // GroupBy Category Descending Order
     await toolbar.groupBy.add({ title: 'Length', ascending: false, locallySaved: false });
@@ -286,14 +286,12 @@ test.describe('Toolbar operations (GRID)', () => {
       title: 'Description',
       isVisible: true,
     });
-
-    await dashboard.closeTab({ title: 'Film' });
   });
 
   test('Create Three GroupBy and Verify With Sort, Filter, Hide', async () => {
     if (enableQuickRun()) test.skip();
     // Open Table
-    await dashboard.treeView.openTable({ title: 'Film' });
+    await dashboard.treeView.openTable({ title: 'Film', baseTitle: context.base.title });
 
     if (isMysql(context)) {
       // change type of ReleaseYear from Year to SingleLineText
@@ -438,7 +436,7 @@ test.describe('Toolbar operations (GRID)', () => {
 
   test('Update GroupBy and Verify', async () => {
     if (enableQuickRun()) test.skip();
-    await dashboard.treeView.openTable({ title: 'Film' });
+    await dashboard.treeView.openTable({ title: 'Film', baseTitle: context.base.title });
 
     if (isMysql(context)) {
       // change type of ReleaseYear from Year to SingleLineText
@@ -484,14 +482,14 @@ test.describe('Toolbar operations (GRID)', () => {
 
   test('Change View and Verify GroupBy', async () => {
     if (enableQuickRun()) test.skip();
-    await dashboard.treeView.openTable({ title: 'Film' });
+    await dashboard.treeView.openTable({ title: 'Film', baseTitle: context.base.title });
 
     await toolbar.groupBy.add({ title: 'Length', ascending: false, locallySaved: false });
 
     await dashboard.viewSidebar.createGridView({ title: 'Test' });
     await dashboard.rootPage.waitForTimeout(500);
 
-    await dashboard.treeView.openTable({ title: 'Film' });
+    await dashboard.treeView.openTable({ title: 'Film', baseTitle: context.base.title });
 
     await dashboard.grid.groupPage.verifyGroupHeader({
       indexMap: [0],
@@ -507,7 +505,7 @@ test.describe('Toolbar operations (GRID)', () => {
 
   test('Duplicate View and Verify GroupBy', async () => {
     // if (enableQuickRun()) test.skip();
-    await dashboard.treeView.openTable({ title: 'Film' });
+    await dashboard.treeView.openTable({ title: 'Film', baseTitle: context.base.title });
     await dashboard.viewSidebar.createGridView({ title: 'Film Grid' });
 
     await toolbar.groupBy.add({ title: 'Length', ascending: false, locallySaved: false });
@@ -528,7 +526,7 @@ test.describe('Toolbar operations (GRID)', () => {
 
   test('Delete GroupBy and Verify', async () => {
     if (enableQuickRun()) test.skip();
-    await dashboard.treeView.openTable({ title: 'Film' });
+    await dashboard.treeView.openTable({ title: 'Film', baseTitle: context.base.title });
 
     await toolbar.groupBy.add({ title: 'Length', ascending: false, locallySaved: false });
     await toolbar.groupBy.add({ title: 'RentalDuration', ascending: false, locallySaved: false });
@@ -563,10 +561,7 @@ test.describe('Toolbar operations (GRID)', () => {
   });
 
   test('Hide, Sort, Filter', async () => {
-    // close 'Team & Auth' tab
-    await dashboard.closeTab({ title: 'Team & Auth' });
-
-    await dashboard.treeView.openTable({ title: 'Country' });
+    await dashboard.treeView.openTable({ title: 'Country', baseTitle: context.base.title });
 
     await dashboard.grid.column.verify({
       title: 'LastUpdate',
@@ -611,8 +606,6 @@ test.describe('Toolbar operations (GRID)', () => {
     // Reset filter
     await toolbar.filter.reset();
     await validateFirstRow('Afghanistan');
-
-    await dashboard.closeTab({ title: 'Country' });
   });
 
   test('row height', async () => {
@@ -624,9 +617,7 @@ test.describe('Toolbar operations (GRID)', () => {
       { title: 'Extra', height: '120px' },
     ];
 
-    // close 'Team & Auth' tab
-    await dashboard.closeTab({ title: 'Team & Auth' });
-    await dashboard.treeView.openTable({ title: 'Country' });
+    await dashboard.treeView.openTable({ title: 'Country', baseTitle: context.base.title });
 
     // set row height & verify
     for (let i = 0; i < rowHeight.length; i++) {

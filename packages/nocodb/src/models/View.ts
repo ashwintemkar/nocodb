@@ -1,12 +1,24 @@
 import {
+  AppEvents,
   CommonAggregations,
+  ExpandedFormMode,
   isSystemColumn,
+  parseProp,
   UITypes,
   ViewTypes,
 } from 'nocodb-sdk';
 import { Logger } from '@nestjs/common';
-import type { BoolType, ColumnReqType, ViewType } from 'nocodb-sdk';
+import type {
+  BoolType,
+  ColumnReqType,
+  ExpandedFormModeType,
+  FilterType,
+  NcRequest,
+  ROW_COLORING_MODE,
+  ViewType,
+} from 'nocodb-sdk';
 import type { NcContext } from '~/interface/config';
+import { RowColorViewHelpers } from '~/helpers/rowColorViewHelpers';
 import Model from '~/models/Model';
 import FormView from '~/models/FormView';
 import GridView from '~/models/GridView';
@@ -39,8 +51,10 @@ import {
   prepareForResponse,
   stringifyMetaProp,
 } from '~/utils/modelUtils';
-import { LinkToAnotherRecordColumn } from '~/models';
+import { CustomUrl, LinkToAnotherRecordColumn } from '~/models';
 import { cleanCommandPaletteCache } from '~/helpers/commandPaletteHelpers';
+import { isEE } from '~/utils';
+import { cleanBaseSchemaCacheForBase } from '~/helpers/scriptHelper';
 
 const { v4: uuidv4 } = require('uuid');
 
@@ -73,6 +87,7 @@ export default class View implements ViewType {
   order: number;
   type: ViewTypes;
   lock_type?: ViewType['lock_type'];
+  row_coloring_mode?: ROW_COLORING_MODE;
   created_by?: string;
   owned_by?: string;
 
@@ -101,6 +116,7 @@ export default class View implements ViewType {
   source_id?: string;
   show_system_fields?: boolean;
   meta?: any;
+  fk_custom_url_id?: string;
 
   constructor(data: View) {
     Object.assign(this, data);
@@ -126,6 +142,7 @@ export default class View implements ViewType {
       );
       if (view) {
         view.meta = parseMetaProp(view);
+
         await NocoCache.set(`${CacheScope.VIEW}:${view.id}`, view);
       }
     }
@@ -208,6 +225,7 @@ export default class View implements ViewType {
       );
       if (view) {
         view.meta = parseMetaProp(view);
+
         await NocoCache.set(`${CacheScope.VIEW}:${fk_model_id}:default`, view);
       }
     }
@@ -249,328 +267,400 @@ export default class View implements ViewType {
     return viewsList?.map((v) => new View(v));
   }
 
+  // todo: refactor and move duplicate logic to service
   static async insert(
     context: NcContext,
-    view: Partial<View> &
-      Partial<
-        FormView | GridView | GalleryView | KanbanView | MapView | CalendarView
-      > & {
-        copy_from_id?: string;
-        fk_grp_col_id?: string;
-        calendar_range?: Partial<CalendarRange>[];
-      },
+    {
+      view,
+      req,
+    }: {
+      view: Partial<View> &
+        Partial<
+          | FormView
+          | GridView
+          | GalleryView
+          | KanbanView
+          | MapView
+          | CalendarView
+        > & {
+          copy_from_id?: string;
+          fk_grp_col_id?: string;
+          calendar_range?: Partial<CalendarRange>[];
+        };
+      req: NcRequest;
+    },
     ncMeta = Noco.ncMeta,
   ) {
-    const insertObj = extractProps(view, [
-      'id',
-      'title',
-      'is_default',
-      'description',
-      'type',
-      'fk_model_id',
-      'base_id',
-      'source_id',
-      'meta',
-    ]);
+    let copyFromView: View;
+    try {
+      const insertObj = extractProps(view, [
+        'id',
+        'title',
+        'is_default',
+        'description',
+        'type',
+        'fk_model_id',
+        'base_id',
+        'source_id',
+        'meta',
+      ]);
 
-    // get order value
-    insertObj.order = await ncMeta.metaGetNextOrder(MetaTable.VIEWS, {
-      fk_model_id: view.fk_model_id,
-    });
+      // get order value
+      insertObj.order = await ncMeta.metaGetNextOrder(MetaTable.VIEWS, {
+        fk_model_id: view.fk_model_id,
+      });
 
-    insertObj.show = true;
+      insertObj.show = true;
 
-    if (!insertObj.meta) {
-      insertObj.meta = {};
-    }
-
-    insertObj.meta = stringifyMetaProp(insertObj);
-
-    const model = await Model.getByIdOrName(
-      context,
-      { id: view.fk_model_id },
-      ncMeta,
-    );
-
-    // get base and base id if missing
-    if (!view.source_id) {
-      insertObj.source_id = model.source_id;
-    }
-
-    const copyFromView =
-      view.copy_from_id && (await View.get(context, view.copy_from_id, ncMeta));
-    await copyFromView?.getView(context);
-
-    const { id: view_id } = await ncMeta.metaInsert2(
-      context.workspace_id,
-      context.base_id,
-      MetaTable.VIEWS,
-      insertObj,
-    );
-
-    let columns: any[] = await (
-      await Model.getByIdOrName(context, { id: view.fk_model_id }, ncMeta)
-    ).getColumns(context, ncMeta);
-
-    // insert view metadata based on view type
-    switch (view.type) {
-      case ViewTypes.GRID:
-        await GridView.insert(
-          context,
-          {
-            ...((copyFromView?.view as GridView) || {}),
-            ...(view as GridView),
-            fk_view_id: view_id,
-          },
-          ncMeta,
-        );
-        break;
-      case ViewTypes.MAP:
-        await MapView.insert(
-          context,
-          {
-            ...(view as MapView),
-            fk_view_id: view_id,
-          },
-          ncMeta,
-        );
-        break;
-      case ViewTypes.GALLERY:
-        await GalleryView.insert(
-          context,
-          {
-            ...(copyFromView?.view || {}),
-            ...view,
-            fk_view_id: view_id,
-          },
-          ncMeta,
-        );
-        break;
-      case ViewTypes.FORM:
-        await FormView.insert(
-          context,
-          {
-            heading: view.title,
-            ...(copyFromView?.view || {}),
-            ...view,
-            fk_view_id: view_id,
-          },
-          ncMeta,
-        );
-        break;
-      case ViewTypes.KANBAN:
-        // set grouping field
-        (view as KanbanView).fk_grp_col_id = view.fk_grp_col_id;
-
-        await KanbanView.insert(
-          context,
-          {
-            ...(copyFromView?.view || {}),
-            ...view,
-            fk_view_id: view_id,
-          },
-          ncMeta,
-        );
-        break;
-      case ViewTypes.CALENDAR: {
-        const obj = extractProps(view, ['calendar_range']);
-        if (!obj.calendar_range) break;
-        const calendarRange = obj.calendar_range as Partial<CalendarRange>[];
-        calendarRange.forEach((range) => {
-          range.fk_view_id = view_id;
-        });
-
-        await CalendarView.insert(
-          context,
-          {
-            ...(copyFromView?.view || {}),
-            ...view,
-            fk_view_id: view_id,
-          },
-          ncMeta,
-        );
-
-        await CalendarRange.bulkInsert(context, calendarRange, ncMeta);
-      }
-    }
-
-    if (copyFromView) {
-      const sorts = await copyFromView.getSorts(context, ncMeta);
-      const filters = await copyFromView.getFilters(context, ncMeta);
-      columns = await copyFromView.getColumns(context, ncMeta);
-
-      for (const sort of sorts) {
-        await Sort.insert(
-          context,
-          {
-            ...extractProps(sort, [
-              'fk_column_id',
-              'direction',
-              'base_id',
-              'source_id',
-              'order',
-            ]),
-            fk_view_id: view_id,
-            id: null,
-          },
-          ncMeta,
-        );
+      if (!insertObj.meta) {
+        insertObj.meta = {};
       }
 
-      for (const filter of filters.children) {
-        await Filter.insert(
-          context,
-          {
-            ...extractProps(filter, [
-              'id',
-              'fk_parent_column_id',
-              'fk_column_id',
-              'comparison_op',
-              'comparison_sub_op',
-              'value',
-              'fk_parent_id',
-              'is_group',
-              'logical_op',
-              'base_id',
-              'source_id',
-              'order',
-            ]),
-            fk_view_id: view_id,
-            id: null,
-          },
-          ncMeta,
-        );
-      }
-    }
-    {
-      let order = 1;
-      let galleryShowLimit = 0;
-      let kanbanShowLimit = 0;
-      let calendarRanges: Array<string> | null = null;
+      insertObj.meta = stringifyMetaProp(insertObj);
 
-      if (view.type === ViewTypes.CALENDAR) {
-        calendarRanges = await View.getRangeColumnsAsArray(
-          context,
-          view_id,
-          ncMeta,
-        );
+      const model = await Model.getByIdOrName(
+        context,
+        { id: view.fk_model_id },
+        ncMeta,
+      );
+
+      // get base and base id if missing
+      if (!view.source_id) {
+        insertObj.source_id = model.source_id;
       }
 
-      if (view.type === ViewTypes.KANBAN && !copyFromView) {
-        // sort by display value & attachment first, then by singleLineText & Number
-        // so that later we can handle control `show` easily
-        columns.sort((a, b) => {
-          const displayValueOrder = b.pv - a.pv;
-          const attachmentOrder =
-            +(b.uidt === UITypes.Attachment) - +(a.uidt === UITypes.Attachment);
-          const singleLineTextOrder =
-            +(b.uidt === UITypes.SingleLineText) -
-            +(a.uidt === UITypes.SingleLineText);
-          const numberOrder =
-            +(b.uidt === UITypes.Number) - +(a.uidt === UITypes.Number);
-          const defaultOrder = b.order - a.order;
-          return (
-            displayValueOrder ||
-            attachmentOrder ||
-            singleLineTextOrder ||
-            numberOrder ||
-            defaultOrder
+      copyFromView =
+        view.copy_from_id &&
+        (await View.get(context, view.copy_from_id, ncMeta));
+      await copyFromView?.getView(context);
+
+      const { id: view_id } = await ncMeta.metaInsert2(
+        context.workspace_id,
+        context.base_id,
+        MetaTable.VIEWS,
+        insertObj,
+      );
+
+      let columns: any[] = await (
+        await Model.getByIdOrName(context, { id: view.fk_model_id }, ncMeta)
+      ).getColumns(context, ncMeta);
+
+      // insert view metadata based on view type
+      switch (view.type) {
+        case ViewTypes.GRID:
+          await GridView.insert(
+            context,
+            {
+              ...((copyFromView?.view as GridView) || {}),
+              ...(view as GridView),
+              fk_view_id: view_id,
+            },
+            ncMeta,
           );
-        });
+          break;
+        case ViewTypes.MAP:
+          await MapView.insert(
+            context,
+            {
+              ...(view as MapView),
+              fk_view_id: view_id,
+            },
+            ncMeta,
+          );
+          break;
+        case ViewTypes.GALLERY:
+          await GalleryView.insert(
+            context,
+            {
+              ...(copyFromView?.view || {}),
+              ...view,
+              fk_view_id: view_id,
+            },
+            ncMeta,
+          );
+          break;
+        case ViewTypes.FORM:
+          await FormView.insert(
+            context,
+            {
+              heading: view.title,
+              ...(copyFromView?.view || {}),
+              ...view,
+              fk_view_id: view_id,
+            },
+            ncMeta,
+          );
+          break;
+        case ViewTypes.KANBAN:
+          // set grouping field
+          (view as KanbanView).fk_grp_col_id = view.fk_grp_col_id;
+
+          await KanbanView.insert(
+            context,
+            {
+              ...(copyFromView?.view || {}),
+              ...view,
+              fk_view_id: view_id,
+            },
+            ncMeta,
+          );
+          break;
+        case ViewTypes.CALENDAR: {
+          const obj = extractProps(view, ['calendar_range']);
+          if (!obj.calendar_range) break;
+          const calendarRange = obj.calendar_range as Partial<CalendarRange>[];
+          calendarRange.forEach((range) => {
+            range.fk_view_id = view_id;
+          });
+
+          await CalendarView.insert(
+            context,
+            {
+              ...(copyFromView?.view || {}),
+              ...view,
+              fk_view_id: view_id,
+            },
+            ncMeta,
+          );
+
+          await CalendarRange.bulkInsert(context, calendarRange, ncMeta);
+        }
       }
 
-      for (const vCol of columns) {
-        let show = 'show' in vCol ? vCol.show : true;
-        const underline = false;
-        const bold = false;
-        const italic = false;
+      if (copyFromView) {
+        // generate parent audit id and add it to req object
+        const eventId = await Noco.ncAudit.genNanoid(MetaTable.AUDIT);
+        req.ncParentAuditId = eventId;
+        Noco.appHooksService.emit(AppEvents.VIEW_DUPLICATE_START, {
+          sourceView: copyFromView,
+          destView: view as ViewType,
+          req,
+          context,
+          id: eventId,
+        });
 
-        if (view.type === ViewTypes.GALLERY) {
-          const galleryView = await GalleryView.get(context, view_id, ncMeta);
-          if (
-            vCol.id === galleryView.fk_cover_image_col_id ||
-            vCol.pv ||
-            galleryShowLimit < 3
-          ) {
-            show = true;
-            galleryShowLimit++;
-          } else {
-            show = false;
-          }
-        } else if (view.type === ViewTypes.KANBAN && !copyFromView) {
-          const kanbanView = await KanbanView.get(context, view_id, ncMeta);
-          if (vCol.id === kanbanView?.fk_grp_col_id) {
-            // include grouping field if it exists
-            show = true;
-          } else if (vCol.id === kanbanView.fk_cover_image_col_id || vCol.pv) {
-            // Show cover image or primary key
-            show = true;
-            kanbanShowLimit++;
-          } else if (kanbanShowLimit < 3 && !isSystemColumn(vCol)) {
-            // show at most 3 non-system columns
-            show = true;
-            kanbanShowLimit++;
-          } else {
-            // other columns will be hidden
-            show = false;
-          }
-        } else if (view.type === ViewTypes.CALENDAR && !copyFromView) {
-          const calendarView = await CalendarView.get(context, view_id, ncMeta);
-          if (calendarRanges && calendarRanges.includes(vCol.id)) {
-            show = true;
-          } else
-            show = vCol.id === calendarView?.fk_cover_image_col_id || vCol.pv;
-          // Show all Fields in Ranges
-        } else if (view.type === ViewTypes.MAP && !copyFromView) {
-          const mapView = await MapView.get(context, view_id, ncMeta);
-          if (vCol.id === mapView?.fk_geo_data_col_id) {
-            show = true;
-          }
+        const sorts = await copyFromView.getSorts(context, ncMeta);
+        const filters = await copyFromView.getFilters(context, ncMeta);
+        columns = await copyFromView.getColumns(context, ncMeta);
+
+        for (const sort of sorts) {
+          await Sort.insert(
+            context,
+            {
+              ...extractProps(sort, [
+                'fk_column_id',
+                'direction',
+                'base_id',
+                'source_id',
+                'order',
+              ]),
+              fk_view_id: view_id,
+              id: null,
+            },
+            ncMeta,
+          );
+          Noco.appHooksService.emit(AppEvents.SORT_CREATE, {
+            sort,
+            view: view as ViewType,
+            column: await Column.get(context, {
+              colId: sort.fk_column_id,
+            }),
+            req,
+            context,
+          });
         }
 
-        // if columns is list of virtual columns then get the parent column
-        const col = vCol.fk_column_id
-          ? await Column.get(context, { colId: vCol.fk_column_id }, ncMeta)
-          : vCol;
+        for (const filter of filters.children) {
+          const createdFilter = await Filter.insert(
+            context,
+            {
+              ...extractProps(filter, [
+                'id',
+                'fk_parent_column_id',
+                'fk_column_id',
+                'comparison_op',
+                'comparison_sub_op',
+                'value',
+                'fk_parent_id',
+                'is_group',
+                'logical_op',
+                'base_id',
+                'source_id',
+                'order',
+              ]),
+              fk_view_id: view_id,
+              id: null,
+            },
+            ncMeta,
+          );
 
-        if (isSystemColumn(col)) show = false;
-        await View.insertColumn(
-          context,
-          {
-            order: order++,
-            ...col,
-            ...vCol,
-            view_id,
-            fk_column_id: vCol.fk_column_id || vCol.id,
-            show,
-            underline,
-            bold,
-            italic,
-            id: null,
-          },
-          ncMeta,
-        );
+          Noco.appHooksService.emit(AppEvents.FILTER_CREATE, {
+            filter: createdFilter as FilterType,
+            column: await Column.get(context, {
+              colId: filter.fk_column_id,
+            }),
+
+            view: view as ViewType,
+            req,
+            context,
+          });
+        }
       }
+      {
+        let order = 1;
+        let galleryShowLimit = 0;
+        let kanbanShowLimit = 0;
+        let calendarRanges: Array<string> | null = null;
+
+        if (view.type === ViewTypes.CALENDAR) {
+          calendarRanges = await View.getRangeColumnsAsArray(
+            context,
+            view_id,
+            ncMeta,
+          );
+        }
+
+        if (view.type === ViewTypes.KANBAN && !copyFromView) {
+          // sort by display value & attachment first, then by singleLineText & Number
+          // so that later we can handle control `show` easily
+          columns.sort((a, b) => {
+            const displayValueOrder = b.pv - a.pv;
+            const attachmentOrder =
+              +(b.uidt === UITypes.Attachment) -
+              +(a.uidt === UITypes.Attachment);
+            const singleLineTextOrder =
+              +(b.uidt === UITypes.SingleLineText) -
+              +(a.uidt === UITypes.SingleLineText);
+            const numberOrder =
+              +(b.uidt === UITypes.Number) - +(a.uidt === UITypes.Number);
+            const defaultOrder = b.order - a.order;
+            return (
+              displayValueOrder ||
+              attachmentOrder ||
+              singleLineTextOrder ||
+              numberOrder ||
+              defaultOrder
+            );
+          });
+        }
+
+        for (const vCol of columns) {
+          let show = 'show' in vCol ? vCol.show : true;
+          const underline = false;
+          const bold = false;
+          const italic = false;
+
+          if (view.type === ViewTypes.GALLERY) {
+            const galleryView = await GalleryView.get(context, view_id, ncMeta);
+            if (
+              vCol.id === galleryView.fk_cover_image_col_id ||
+              vCol.pv ||
+              galleryShowLimit < 3
+            ) {
+              show = true;
+              galleryShowLimit++;
+            } else {
+              show = false;
+            }
+          } else if (view.type === ViewTypes.KANBAN && !copyFromView) {
+            const kanbanView = await KanbanView.get(context, view_id, ncMeta);
+            if (vCol.id === kanbanView?.fk_grp_col_id) {
+              // include grouping field if it exists
+              show = true;
+            } else if (
+              vCol.id === kanbanView.fk_cover_image_col_id ||
+              vCol.pv
+            ) {
+              // Show cover image or primary key
+              show = true;
+              kanbanShowLimit++;
+            } else if (kanbanShowLimit < 3 && !isSystemColumn(vCol)) {
+              // show at most 3 non-system columns
+              show = true;
+              kanbanShowLimit++;
+            } else {
+              // other columns will be hidden
+              show = false;
+            }
+          } else if (view.type === ViewTypes.CALENDAR && !copyFromView) {
+            const calendarView = await CalendarView.get(
+              context,
+              view_id,
+              ncMeta,
+            );
+            if (calendarRanges && calendarRanges.includes(vCol.id)) {
+              show = true;
+            } else
+              show = vCol.id === calendarView?.fk_cover_image_col_id || vCol.pv;
+            // Show all Fields in Ranges
+          } else if (view.type === ViewTypes.MAP && !copyFromView) {
+            const mapView = await MapView.get(context, view_id, ncMeta);
+            if (vCol.id === mapView?.fk_geo_data_col_id) {
+              show = true;
+            }
+          }
+
+          // if columns is list of virtual columns then get the parent column
+          const col = vCol.fk_column_id
+            ? await Column.get(context, { colId: vCol.fk_column_id }, ncMeta)
+            : vCol;
+
+          if (isSystemColumn(col)) show = false;
+          await View.insertColumn(
+            context,
+            {
+              order: order++,
+              ...col,
+              ...vCol,
+              view_id,
+              fk_column_id: vCol.fk_column_id || vCol.id,
+              show,
+              underline,
+              bold,
+              italic,
+              id: null,
+            },
+            ncMeta,
+          );
+        }
+      }
+
+      cleanCommandPaletteCache(context.workspace_id).catch(() => {
+        logger.error('Failed to clean command palette cache');
+      });
+
+      cleanBaseSchemaCacheForBase(context.base_id).catch(() => {
+        logger.error('Failed to clean base schema cache');
+      });
+
+      if (copyFromView) {
+        Noco.appHooksService.emit(AppEvents.VIEW_DUPLICATE_COMPLETE, {
+          sourceView: copyFromView,
+          destView: view as ViewType,
+          req,
+          context,
+        });
+      }
+      return View.get(context, view_id, ncMeta).then(async (v) => {
+        await NocoCache.appendToList(
+          CacheScope.VIEW,
+          [view.fk_model_id],
+          `${CacheScope.VIEW}:${view_id}`,
+        );
+        return v;
+      });
+    } catch (e) {
+      if (copyFromView) {
+        Noco.appHooksService.emit(AppEvents.VIEW_DUPLICATE_FAIL, {
+          sourceView: copyFromView,
+          destView: view as ViewType,
+          error: e,
+          req,
+          context,
+        });
+      }
+      throw e;
     }
-
-    await Model.getNonDefaultViewsCountAndReset(
-      context,
-      { modelId: view.fk_model_id },
-      ncMeta,
-    );
-
-    cleanCommandPaletteCache(context.workspace_id).catch(() => {
-      logger.error('Failed to clean command palette cache');
-    });
-
-    return View.get(context, view_id, ncMeta).then(async (v) => {
-      await NocoCache.appendToList(
-        CacheScope.VIEW,
-        [view.fk_model_id],
-        `${CacheScope.VIEW}:${view_id}`,
-      );
-      return v;
-    });
   }
 
   static async getRangeColumnsAsArray(
@@ -622,9 +712,12 @@ export default class View implements ViewType {
       const modifiedInsertObj = {
         ...insertObj,
         fk_view_id: view.id,
+        source_id: view.source_id,
       };
 
-      if (param.column_show?.view_id === view.id) {
+      if (colIdMap.get(param.fk_column_id)?.uidt === UITypes.Order) {
+        modifiedInsertObj.show = false;
+      } else if (param.column_show?.view_id === view.id) {
         modifiedInsertObj.show = true;
       } else if (view.uuid) {
         // if view is shared, then keep the show state as it is
@@ -1003,6 +1096,30 @@ export default class View implements ViewType {
     return res;
   }
 
+  static async getColumn(
+    context: NcContext,
+    viewId: string,
+    colId: string,
+    ncMeta = Noco.ncMeta,
+  ) {
+    const view = await this.get(context, viewId, ncMeta);
+    switch (view.type) {
+      case ViewTypes.GRID:
+        return GridViewColumn.get(context, colId, ncMeta);
+      case ViewTypes.MAP:
+        return MapViewColumn.get(context, colId, ncMeta);
+      case ViewTypes.GALLERY:
+        return GalleryViewColumn.get(context, colId, ncMeta);
+      case ViewTypes.KANBAN:
+        return KanbanViewColumn.get(context, colId, ncMeta);
+      case ViewTypes.FORM:
+        return FormViewColumn.get(context, colId, ncMeta);
+      case ViewTypes.CALENDAR:
+        return CalendarViewColumn.get(context, colId, ncMeta);
+    }
+    return null;
+  }
+
   static async insertOrUpdateColumn(
     context: NcContext,
     viewId: string,
@@ -1243,12 +1360,16 @@ export default class View implements ViewType {
       MetaTable.VIEWS,
       {
         uuid: null,
+        ...(isEE ? { fk_custom_url_id: null } : {}),
       },
       viewId,
     );
 
+    await CustomUrl.delete({ view_id: viewId });
+
     await NocoCache.update(`${CacheScope.VIEW}:${viewId}`, {
       uuid: null,
+      ...(isEE ? { fk_custom_url_id: null } : {}),
     });
   }
 
@@ -1265,6 +1386,10 @@ export default class View implements ViewType {
       meta?: any;
       owned_by?: string;
       created_by?: string;
+      expanded_record_mode?: ExpandedFormModeType;
+      attachment_mode_column_id?: string;
+      fk_custom_url_id?: string;
+      row_coloring_mode?: ROW_COLORING_MODE;
     },
     includeCreatedByAndUpdateBy = false,
     ncMeta = Noco.ncMeta,
@@ -1278,8 +1403,19 @@ export default class View implements ViewType {
       'password',
       'meta',
       'uuid',
+      'row_coloring_mode',
+      ...(isEE ? ['fk_custom_url_id'] : []),
       ...(includeCreatedByAndUpdateBy ? ['owned_by', 'created_by'] : []),
+      ...(isEE ? ['expanded_record_mode', 'attachment_mode_column_id'] : []),
     ]);
+
+    if (isEE) {
+      if (!updateObj?.attachment_mode_column_id) {
+        updateObj.expanded_record_mode = ExpandedFormMode.FIELD;
+      } else {
+        updateObj.expanded_record_mode = ExpandedFormMode.ATTACHMENT;
+      }
+    }
 
     const oldView = await this.get(context, viewId, ncMeta);
 
@@ -1324,6 +1460,10 @@ export default class View implements ViewType {
       logger.error('Failed to clean command palette cache');
     });
 
+    cleanBaseSchemaCacheForBase(context.base_id).catch(() => {
+      logger.error('Failed to clean base schema cache');
+    });
+
     return view;
   }
 
@@ -1337,6 +1477,9 @@ export default class View implements ViewType {
     const tableScope = this.extractViewTableNameScope(view);
     const columnTable = this.extractViewColumnsTableName(view);
     const columnTableScope = this.extractViewColumnsTableNameScope(view);
+    await RowColorViewHelpers.withContext(context, { ncMeta }).viewDeleted(
+      view,
+    );
     await ncMeta.metaDelete(
       context.workspace_id,
       context.base_id,
@@ -1406,18 +1549,23 @@ export default class View implements ViewType {
         });
       }
     }
+
     // on update, delete any optimised single query cache
     await View.clearSingleQueryCache(context, view.fk_model_id, [view], ncMeta);
+
+    if (isEE && view.fk_custom_url_id) {
+      CustomUrl.delete({ id: view.fk_custom_url_id as string }).catch(() => {
+        logger.error(`Failed to delete custom urls of viewId: ${view.id}`);
+      });
+    }
 
     cleanCommandPaletteCache(context.workspace_id).catch(() => {
       logger.error('Failed to clean command palette cache');
     });
 
-    await Model.getNonDefaultViewsCountAndReset(
-      context,
-      { modelId: view.fk_model_id },
-      ncMeta,
-    );
+    cleanBaseSchemaCacheForBase(context.base_id).catch(() => {
+      logger.error('Failed to clean base schema cache');
+    });
   }
 
   static async showAllColumns(
@@ -1573,6 +1721,42 @@ export default class View implements ViewType {
           }
         : null,
     );
+  }
+
+  static async getSharedViewPath(
+    context: NcContext,
+    viewId,
+    ncMeta = Noco.ncMeta,
+  ) {
+    const view = await this.get(context, viewId, ncMeta);
+    if (!view.uuid) return null;
+
+    let viewType;
+    switch (view.type) {
+      case ViewTypes.FORM:
+        viewType = 'form';
+        break;
+      case ViewTypes.KANBAN:
+        viewType = 'kanban';
+        break;
+      case ViewTypes.GALLERY:
+        viewType = 'gallery';
+        break;
+      case ViewTypes.MAP:
+        viewType = 'map';
+        break;
+      case ViewTypes.CALENDAR:
+        viewType = 'calendar';
+        break;
+      default:
+        viewType = 'view';
+    }
+
+    return `${encodeURI(
+      `/nc/${viewType}/${view.uuid}${
+        parseProp(view.meta)?.surveyMode ? '/survey' : ''
+      }`,
+    )}`;
   }
 
   static async shareViewList(
@@ -1866,13 +2050,21 @@ export default class View implements ViewType {
 
         if (view.type === ViewTypes.GALLERY) {
           const galleryView = await GalleryView.get(context, view.id, ncMeta);
+          // define the limit of columns to show in gallery view, excluding the cover image column and primary value column
+          const showLimit = galleryView.fk_cover_image_col_id ? 2 : 3;
+
           if (
             (column.id === galleryView.fk_cover_image_col_id && column.pv) ||
             (column.id !== galleryView.fk_cover_image_col_id &&
-              (column.pv || galleryShowLimit < 3))
+              (column.pv || galleryShowLimit < showLimit) &&
+              // exclude system columns
+              !column.system)
           ) {
             show = true;
-            galleryShowLimit++;
+            // increment the count of columns shown in gallery view if it is not a primary value or cover image column
+            if (!column.pk && column.id !== galleryView.fk_cover_image_col_id) {
+              galleryShowLimit++;
+            }
           } else {
             show = false;
           }
@@ -1983,18 +2175,32 @@ export default class View implements ViewType {
 
   static async insertMetaOnly(
     context: NcContext,
-    view: Partial<View> &
-      Partial<
-        FormView | GridView | GalleryView | KanbanView | MapView | CalendarView
-      > & {
-        copy_from_id?: string;
-        fk_grp_col_id?: string;
-        calendar_range?: Partial<CalendarRange>[];
-        created_by: string;
-        owned_by: string;
-      },
-    model: {
-      getColumns: (context: NcContext, ncMeta?) => Promise<Column[]>;
+    {
+      view,
+      model,
+      req,
+    }: {
+      view: Partial<View> &
+        Partial<
+          | FormView
+          | GridView
+          | GalleryView
+          | KanbanView
+          | MapView
+          | CalendarView
+        > & {
+          copy_from_id?: string;
+          fk_grp_col_id?: string;
+          calendar_range?: Partial<CalendarRange>[];
+          created_by: string;
+          owned_by: string;
+          expanded_record_mode?: ExpandedFormModeType;
+          attachment_mode_column_id?: string;
+        };
+      model: {
+        getColumns: (context: NcContext, ncMeta?) => Promise<Column[]>;
+      };
+      req: NcRequest;
     },
     ncMeta = Noco.ncMeta,
   ) {
@@ -2011,7 +2217,22 @@ export default class View implements ViewType {
       'created_by',
       'owned_by',
       'lock_type',
+      ...(isEE
+        ? [
+            'expanded_record_mode',
+            'attachment_mode_column_id',
+            'row_coloring_mode',
+          ]
+        : []),
     ]);
+
+    if (isEE) {
+      if (!insertObj?.attachment_mode_column_id) {
+        insertObj.expanded_record_mode = ExpandedFormMode.FIELD;
+      } else {
+        insertObj.expanded_record_mode = ExpandedFormMode.ATTACHMENT;
+      }
+    }
 
     if (!insertObj.order) {
       // get order value
@@ -2134,103 +2355,171 @@ export default class View implements ViewType {
         break;
       }
     }
+    try {
+      // copy from view
+      if (copyFromView) {
+        // generate parent audit id and add it to req object
+        const eventId = await Noco.ncAudit.genNanoid(MetaTable.AUDIT);
+        req.ncParentAuditId = eventId;
+        Noco.appHooksService.emit(AppEvents.VIEW_DUPLICATE_START, {
+          sourceView: copyFromView,
+          destView: view as ViewType,
+          req,
+          context,
+          id: eventId,
+        });
 
-    //  copy from view
-    if (copyFromView) {
-      const sorts = await copyFromView.getSorts(context, ncMeta);
-      const filters = await Filter.rootFilterList(
-        context,
-        { viewId: copyFromView.id },
-        ncMeta,
-      );
-      const viewColumns = await copyFromView.getColumns(context, ncMeta);
+        const duplicateRowColorConditions =
+          await RowColorViewHelpers.withContext(
+            context,
+          ).getDuplicateRowColorConditions({
+            views: [copyFromView],
+            idMap: new Map<string, string>([[copyFromView.id, view_id]]),
+          });
 
-      const sortInsertObjs = [];
-      const filterInsertObjs = [];
+        const sorts = await copyFromView.getSorts(context, ncMeta);
+        const filters = await Filter.rootFilterList(
+          context,
+          { viewId: copyFromView.id },
+          ncMeta,
+        );
+        const viewColumns = await copyFromView.getColumns(context, ncMeta);
 
-      for (const sort of sorts) {
-        sortInsertObjs.push({
-          ...extractProps(sort, [
-            'fk_column_id',
-            'direction',
-            'base_id',
-            'source_id',
-          ]),
-          fk_view_id: view_id,
-          id: undefined,
+        const sortInsertObjs = [];
+        const filterInsertObjs = [];
+
+        for (const sort of sorts) {
+          sortInsertObjs.push({
+            ...extractProps(sort, [
+              'fk_column_id',
+              'direction',
+              'base_id',
+              'source_id',
+            ]),
+            fk_view_id: view_id,
+            id: undefined,
+          });
+
+          Noco.appHooksService.emit(AppEvents.SORT_CREATE, {
+            sort: {
+              ...sort,
+              id: undefined,
+            },
+            view: view as ViewType,
+            column: await Column.get(context, {
+              colId: sort.fk_column_id,
+            }),
+            req,
+            context,
+          });
+        }
+
+        for (const filter of filters) {
+          const fn = async (filter, parentId: string = null) => {
+            const generatedId = await ncMeta.genNanoid(MetaTable.FILTER_EXP);
+
+            filterInsertObjs.push({
+              ...extractProps(filter, [
+                'fk_parent_column_id',
+                'fk_row_color_condition_id',
+                'fk_column_id',
+                'comparison_op',
+                'comparison_sub_op',
+                'value',
+                'fk_parent_id',
+                'is_group',
+                'logical_op',
+                'base_id',
+                'source_id',
+                'order',
+              ]),
+              fk_view_id: view_id,
+              id: generatedId,
+              fk_parent_id: parentId,
+            });
+            if (filter.is_group)
+              await Promise.all(
+                ((await filter.getChildren(context)) || []).map(
+                  async (child) => {
+                    await fn(child, generatedId);
+                  },
+                ),
+              );
+
+            Noco.appHooksService.emit(AppEvents.FILTER_CREATE, {
+              filter: { ...filter, id: undefined } as FilterType,
+              column: await Column.get(context, {
+                colId: filter.fk_column_id,
+              }),
+              view: view as ViewType,
+              req,
+              context,
+            });
+          };
+
+          await fn(filter);
+        }
+
+        await ncMeta.bulkMetaInsert(
+          context.workspace_id,
+          context.base_id,
+          MetaTable.SORT,
+          sortInsertObjs,
+        );
+
+        await ncMeta.bulkMetaInsert(
+          context.workspace_id,
+          context.base_id,
+          MetaTable.FILTER_EXP,
+          duplicateRowColorConditions.filters.concat(filterInsertObjs),
+          true,
+        );
+
+        await ncMeta.bulkMetaInsert(
+          context.workspace_id,
+          context.base_id,
+          MetaTable.ROW_COLOR_CONDITIONS,
+          duplicateRowColorConditions.rowColorConditions,
+          true,
+        );
+
+        // populate view columns
+        await View.bulkColumnInsertToViews(
+          context,
+          { viewColumns, copyFromView },
+          insertedView,
+        );
+      } else {
+        // populate view columns
+        await View.bulkColumnInsertToViews(
+          context,
+          { columns: (await model.getColumns(context, ncMeta)) as any[] },
+          insertedView,
+        );
+      }
+
+      if (copyFromView) {
+        Noco.appHooksService.emit(AppEvents.VIEW_DUPLICATE_COMPLETE, {
+          sourceView: copyFromView,
+          destView: view as ViewType,
+          req,
+          context,
+        });
+      }
+      return insertedView;
+    } catch (e) {
+      if (copyFromView) {
+        Noco.appHooksService.emit(AppEvents.VIEW_DUPLICATE_FAIL, {
+          sourceView: copyFromView,
+          destView: view as ViewType,
+          error: e,
+          req,
+          context,
         });
       }
 
-      for (const filter of filters) {
-        const fn = async (filter, parentId: string = null) => {
-          const generatedId = await ncMeta.genNanoid(MetaTable.FILTER_EXP);
-
-          filterInsertObjs.push({
-            ...extractProps(filter, [
-              'fk_parent_column_id',
-              'fk_column_id',
-              'comparison_op',
-              'comparison_sub_op',
-              'value',
-              'fk_parent_id',
-              'is_group',
-              'logical_op',
-              'base_id',
-              'source_id',
-              'order',
-            ]),
-            fk_view_id: view_id,
-            id: generatedId,
-            fk_parent_id: parentId,
-          });
-          if (filter.is_group)
-            await Promise.all(
-              ((await filter.getChildren(context)) || []).map(async (child) => {
-                await fn(child, generatedId);
-              }),
-            );
-        };
-
-        await fn(filter);
-      }
-
-      await ncMeta.bulkMetaInsert(
-        context.workspace_id,
-        context.base_id,
-        MetaTable.SORT,
-        sortInsertObjs,
-      );
-
-      await ncMeta.bulkMetaInsert(
-        context.workspace_id,
-        context.base_id,
-        MetaTable.FILTER_EXP,
-        filterInsertObjs,
-        true,
-      );
-
-      // populate view columns
-      await View.bulkColumnInsertToViews(
-        context,
-        { viewColumns, copyFromView },
-        insertedView,
-      );
-    } else {
-      // populate view columns
-      await View.bulkColumnInsertToViews(
-        context,
-        { columns: (await model.getColumns(context, ncMeta)) as any[] },
-        insertedView,
-      );
+      throw e;
     }
-
-    await Model.getNonDefaultViewsCountAndReset(
-      context,
-      { modelId: view.fk_model_id },
-      ncMeta,
-    );
-
-    return insertedView;
   }
 
   public static extractViewColumnsTableName(view: View) {
@@ -2367,7 +2656,7 @@ export default class View implements ViewType {
         this.view = await MapView.get(context, this.id, ncMeta);
         break;
       case ViewTypes.FORM:
-        this.view = await FormView.get(context, this.id, ncMeta);
+        this.view = await FormView.getWithInfo(context, this.id, ncMeta);
         break;
       case ViewTypes.CALENDAR:
         this.view = await CalendarView.get(context, this.id, ncMeta);
@@ -2424,4 +2713,20 @@ export default class View implements ViewType {
   async delete(context: NcContext, ncMeta = Noco.ncMeta) {
     await View.delete(context, this.id, ncMeta);
   }
+
+  static async updateIfColumnUsedAsExpandedMode(
+    _context: NcContext,
+    _columnId: string,
+    _modelId: string,
+    _ncMeta = Noco.ncMeta,
+  ) {
+    return;
+  }
+}
+
+export interface ViewMetaRowColoring {
+  rowColoringInfo: {
+    fk_column_id: string;
+    is_set_as_background: boolean;
+  };
 }

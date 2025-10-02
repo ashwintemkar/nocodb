@@ -24,7 +24,7 @@ export function genMysql2AggregatedQuery({
   column: Column;
   baseModelSqlv2: BaseModelSqlv2;
   aggregation: string;
-  column_query: string;
+  column_query: string | Knex.QueryBuilder;
   parsedFormulaType?: FormulaDataTypes;
   aggType:
     | 'common'
@@ -395,7 +395,7 @@ export function genMysql2AggregatedQuery({
     }
   }
 
-  if (alias && aggregationSql) {
+  if (aggregationSql) {
     if (
       ![AllAggregations.EarliestDate, AllAggregations.LatestDate].includes(
         aggregation as any,
@@ -403,8 +403,9 @@ export function genMysql2AggregatedQuery({
     ) {
       aggregationSql = knex.raw(`COALESCE(??, 0)`, [aggregationSql]);
     }
-
-    aggregationSql = knex.raw(`?? AS ??`, [aggregationSql, alias]);
+    if (alias) {
+      aggregationSql = knex.raw(`?? AS ??`, [aggregationSql, alias]);
+    }
   }
 
   return aggregationSql?.toQuery();

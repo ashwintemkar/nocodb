@@ -1,26 +1,29 @@
 import type { ComputedRef, Ref } from 'vue'
-import {
-  type Api,
-  type CalendarRangeType,
-  type CalendarType,
-  type ColumnType,
-  FormulaDataTypes,
-  type PaginatedType,
-  type TableType,
-  type ViewType,
-  isSystemColumn,
-  isVirtualCol,
+import { EventType, FormulaDataTypes, UITypes, ViewTypes, isSystemColumn, isVirtualCol, workerWithTimezone } from 'nocodb-sdk'
+import type {
+  Api,
+  CalendarRangeType,
+  CalendarType,
+  ColumnType,
+  DataPayload,
+  PaginatedType,
+  TableType,
+  ViewType,
 } from 'nocodb-sdk'
-import { UITypes } from 'nocodb-sdk'
-import dayjs from 'dayjs'
+import type dayjs from 'dayjs'
 
-const formatData = (list: Record<string, any>[]) =>
+const formatData = (
+  list: Record<string, any>[],
+  evaluateRowMetaRowColorInfoCallback?: (row: Record<string, any>) => RowMetaRowColorInfo,
+) =>
   list.map(
     (row) =>
       ({
         row: { ...row },
         oldRow: { ...row },
-        rowMeta: {},
+        rowMeta: {
+          ...(evaluateRowMetaRowColorInfoCallback?.(row) ?? {}),
+        },
       } as Row),
   )
 
@@ -42,30 +45,136 @@ const [useProvideCalendarViewStore, useCalendarViewStore] = useInjectionState(
       throw new Error('Table meta is not available')
     }
 
-    const pageDate = ref<dayjs.Dayjs>(dayjs())
-
     const { isUIAllowed } = useRoles()
 
     const { isMobileMode } = useGlobal()
 
+    const { getValidSearchQueryForColumn } = useFieldQuery()
+
+    const { sharedView, fetchSharedViewData, fetchSharedViewActiveDate, fetchSharedCalendarViewData } = useSharedView()
+
     const displayField = computed(() => meta.value?.columns?.find((c) => c.pv))
 
-    const activeCalendarView = ref<'month' | 'year' | 'day' | 'week'>()
+    const isPublic = ref(shared) || inject(IsPublicInj, ref(false))
+
+    const calendarMetaData = computed<CalendarType>(() => {
+      return isPublic.value ? (sharedView.value?.view as CalendarType) : (viewMeta.value?.view as CalendarType)
+    })
+
+    // The current view meta properties
+    const viewMetaProperties = computed<{
+      active_view: string
+      hide_weekend: boolean
+    }>(() => {
+      let meta = calendarMetaData.value?.meta ?? {}
+
+      if (typeof meta === 'string') {
+        meta = parseProp(meta)
+      }
+
+      return meta as {
+        active_view: string
+        hide_weekend: boolean
+      }
+    })
+
+    // The range of columns that are used for the calendar view
+    const calendarRange = computed<
+      Array<{
+        fk_from_col: ColumnType
+        fk_to_col?: ColumnType | null
+        id: string
+        is_readonly: boolean
+      }>
+    >(() => {
+      return calendarMetaData.value?.calendar_range
+        ?.map(
+          (
+            range: CalendarRangeType & {
+              id?: string
+            },
+          ) => {
+            const fromCol = meta.value?.columns?.find((col) => col.id === range.fk_from_column_id)
+            const toCol = range.fk_to_column_id ? meta.value?.columns?.find((col) => col.id === range.fk_to_column_id) : null
+
+            if (fromCol?.uidt === UITypes.Formula || toCol?.uidt === UITypes.Formula) {
+              // Check if fromCol Formula return type is Date
+              const isFromColDate =
+                fromCol?.uidt === UITypes.Formula && (fromCol?.colOptions as any)?.parsed_tree?.dataType === FormulaDataTypes.DATE
+              // Check if toCol Formula return type is Date
+
+              const isToColDate =
+                toCol?.uidt === UITypes.Formula && (toCol?.colOptions as any)?.parsed_tree?.dataType === FormulaDataTypes.DATE
+
+              if (!isFromColDate) {
+                message.error(`Please update the Formula column ${fromCol?.title} to return a date`)
+                return null
+              }
+
+              if (toCol && !isToColDate) {
+                message.error(`Please update the Formula column ${toCol?.title} to return a date`)
+                return null
+              }
+            }
+
+            return {
+              id: range?.id,
+              fk_from_col: fromCol,
+              fk_to_col: toCol,
+              is_readonly: [fromCol, toCol].some((col) => isSystemColumn(col) || isVirtualCol(col)),
+            }
+          },
+        )
+        .filter(Boolean) as any
+    })
+
+    const calDataType = computed(() => {
+      if (!calendarRange.value || !calendarRange.value[0]) return null
+      return calendarRange.value[0]?.fk_from_col?.uidt
+    })
+
+    const timezone = computed(() => {
+      return getTimeZoneFromName(calendarRange.value?.[0]?.fk_from_col?.meta?.timezone)?.name
+    })
+
+    const timezoneDayjs = reactive(workerWithTimezone(isEeUI, timezone?.value))
 
     const searchQuery = reactive({
       value: '',
       field: '',
+      isValidFieldQuery: true,
     })
 
-    const selectedDate = ref<dayjs.Dayjs>(dayjs())
+    const validSearchQueryForDisplayField = computed(() => {
+      if (!displayField.value || !searchQuery.value?.trim()) {
+        searchQuery.isValidFieldQuery = true
+        return
+      }
 
-    const selectedTime = ref<dayjs.Dayjs>(dayjs())
+      const validSearchQuery = getValidSearchQueryForColumn(
+        displayField.value,
+        searchQuery.value.trim(),
+        meta.value as TableType,
+        { getWhereQueryAs: 'object' },
+      )
 
-    const selectedMonth = ref<dayjs.Dayjs>(dayjs())
+      if (!validSearchQuery) {
+        searchQuery.isValidFieldQuery = false
+        return
+      }
+
+      return validSearchQuery as ValidSearchQueryForColumnReturnType
+    })
+
+    const pageDate = ref<dayjs.Dayjs>(timezoneDayjs.dayjsTz())
+
+    const selectedDate = ref<dayjs.Dayjs>(timezoneDayjs.dayjsTz())
+
+    const selectedTime = ref<dayjs.Dayjs>(timezoneDayjs.dayjsTz())
+
+    const selectedMonth = ref<dayjs.Dayjs>(timezoneDayjs.dayjsTz())
 
     const isCalendarDataLoading = ref<boolean>(false)
-
-    const isCalendarMetaLoading = ref<boolean>(false)
 
     // show/hide side menu in calendar
     const showSideMenu = ref(!isMobileMode.value)
@@ -75,8 +184,8 @@ const [useProvideCalendarViewStore, useCalendarViewStore] = useInjectionState(
       start: dayjs.Dayjs
       end: dayjs.Dayjs
     }>({
-      start: dayjs(selectedDate.value).startOf('week'), // This will be the previous Monday
-      end: dayjs(selectedDate.value).startOf('week').add(6, 'day'), // This will be the following Sunday
+      start: timezoneDayjs.dayjsTz(selectedDate.value)!.startOf('week'), // This will be the previous Monday
+      end: timezoneDayjs.dayjsTz(selectedDate.value)!.startOf('week').add(6, 'day'), // This will be the following Sunday
     })
 
     const defaultPageSize = 25
@@ -89,6 +198,8 @@ const [useProvideCalendarViewStore, useCalendarViewStore] = useInjectionState(
 
     const activeDates = ref<dayjs.Dayjs[]>([])
 
+    const activeCalendarView = ref<'month' | 'year' | 'day' | 'week'>((viewMetaProperties.value?.active_view as any) ?? 'month')
+
     // The active filter in the sidebar
     const sideBarFilterOption = ref<string>(activeCalendarView.value ?? 'allRecords')
 
@@ -98,19 +209,19 @@ const [useProvideCalendarViewStore, useCalendarViewStore] = useInjectionState(
 
     const { base } = storeToRefs(useBase())
 
-    const { $api, $e } = useNuxtApp()
+    const { $api, $e, $ncSocket } = useNuxtApp()
 
     const { t } = useI18n()
 
     const { addUndo, clone, defineViewScope } = useUndoRedo()
 
-    const isPublic = ref(shared) || inject(IsPublicInj, ref(false))
+    const { sorts, nestedFilters, isSyncedTable, eventBus } = useSmartsheetStoreOrThrow()
 
-    const { sorts, nestedFilters } = useSmartsheetStoreOrThrow()
+    const { getEvaluatedRowMetaRowColorInfo } = useViewRowColorRender()
 
-    const { sharedView, fetchSharedViewData, fetchSharedViewActiveDate, fetchSharedCalendarViewData } = useSharedView()
+    const viewStore = useViewsStore()
 
-    const calendarMetaData = ref<CalendarType>({})
+    const { updateViewMeta } = viewStore
 
     const paginationData = ref<PaginatedType>({ page: 1, pageSize: defaultPageSize })
 
@@ -124,47 +235,12 @@ const [useProvideCalendarViewStore, useCalendarViewStore] = useInjectionState(
       return isMysql(meta.value?.source_id) ? 'YYYY-MM-DD HH:mm:ss' : 'YYYY-MM-DD HH:mm:ssZ'
     })
 
-    // The range of columns that are used for the calendar view
-    const calendarRange = ref<
-      Array<{
-        fk_from_col: ColumnType
-        fk_to_col?: ColumnType | null
-        id: string
-        is_readonly: boolean
-      }>
-    >([])
-
-    const calDataType = computed(() => {
-      if (!calendarRange.value || !calendarRange.value[0]) return null
-      return calendarRange.value[0]?.fk_from_col?.uidt
-    })
-
-    // The current view meta properties
-    const viewMetaProperties = computed<{
-      active_view: string
-      hide_weekend: boolean
-    }>(() => {
-      let meta = calendarMetaData.value?.meta ?? {}
-
-      if (typeof meta === 'string') {
-        try {
-          meta = JSON.parse(meta)
-        } catch (e) {}
-      }
-
-      return meta as {
-        active_view: string
-        hide_weekend: boolean
-      }
-    })
-
     // sideBarFilter - The sideBar filter is automatically generated based on the current calendar view
     // and the search query
     const sideBarFilter = computed(() => {
       let combinedFilters: any = []
 
       if (!calendarRange.value) return []
-
       if (sideBarFilterOption.value === 'allRecords') {
         // If the sideBarFilterOption is allRecords, then we don't need to apply any filters
         combinedFilters = []
@@ -217,25 +293,25 @@ const [useProvideCalendarViewStore, useCalendarViewStore] = useInjectionState(
 
         switch (sideBarFilterOption.value) {
           case 'day':
+          case 'selectedDate':
             fromDate = selectedDate.value.startOf('day')
             toDate = selectedDate.value.endOf('day')
             prevDate = selectedDate.value.subtract(1, 'day').endOf('day')
             nextDate = selectedDate.value.add(1, 'day').startOf('day')
             break
           case 'week':
-            fromDate = selectedDateRange.value.start.startOf('day')
-            toDate = selectedDateRange.value.end.endOf('day')
-            prevDate = selectedDateRange.value.start.subtract(1, 'day').endOf('day')
-            nextDate = selectedDateRange.value.end.add(1, 'day').startOf('day')
+            fromDate = selectedDateRange.value.start.startOf('week')
+            toDate = selectedDateRange.value.end.endOf('week')
+            prevDate = timezoneDayjs.timezonize(fromDate.subtract(1, 'day')).endOf('day')
+            nextDate = timezoneDayjs.timezonize(toDate.add(1, 'day')).startOf('day')
             break
           case 'month': {
-            const startOfMonth = selectedMonth.value.startOf('month')
-            const endOfMonth = selectedMonth.value.endOf('month')
+            const startOfMonth = timezoneDayjs.timezonize(selectedMonth.value.startOf('month'))
+            const firstDayToDisplay = timezoneDayjs.timezonize(startOfMonth.startOf('week'))
+            const endOfMonth = timezoneDayjs.timezonize(selectedMonth.value.endOf('month')).endOf('week')
 
-            const daysToDisplay = Math.max(endOfMonth.diff(startOfMonth, 'day') + 1, 35)
-            fromDate = startOfMonth.subtract((startOfMonth.day() + 7) % 7, 'day').add(1, 'day')
-            toDate = fromDate.add(daysToDisplay, 'day').endOf('day')
-
+            fromDate = firstDayToDisplay
+            toDate = endOfMonth
             prevDate = fromDate.subtract(1, 'day').endOf('day')
             nextDate = toDate.add(1, 'day').startOf('day')
             break
@@ -243,26 +319,29 @@ const [useProvideCalendarViewStore, useCalendarViewStore] = useInjectionState(
           case 'year':
             fromDate = selectedDate.value.startOf('year')
             toDate = selectedDate.value.endOf('year')
-            prevDate = fromDate.subtract(1, 'day').endOf('day')
+            prevDate = timezoneDayjs.timezonize(fromDate.subtract(1, 'day')).endOf('day')
             nextDate = toDate.add(1, 'day').startOf('day')
             break
-          case 'selectedDate':
-            fromDate = selectedDate.value.startOf('day')
-            toDate = selectedDate.value.endOf('day')
-            prevDate = selectedDate.value.subtract(1, 'day').endOf('day')
-            nextDate = selectedDate.value.add(1, 'day').startOf('day')
-            break
           case 'selectedHours':
-            fromDate = (selectedTime.value ?? dayjs()).startOf('hour')
-            toDate = (selectedTime.value ?? dayjs()).endOf('hour')
-            prevDate = fromDate?.subtract(1, 'hour').endOf('hour')
-            nextDate = toDate?.add(1, 'hour').startOf('hour')
+            fromDate = timezoneDayjs.timezonize((selectedTime.value ?? timezoneDayjs.dayjsTz()).startOf('hour'))
+            toDate = timezoneDayjs.timezonize((selectedTime.value ?? timezoneDayjs.dayjsTz()).endOf('hour'))
+            prevDate = timezoneDayjs.timezonize(fromDate?.subtract(1, 'hour').endOf('hour'))
+            nextDate = timezoneDayjs.timezonize(toDate?.add(1, 'hour').startOf('hour'))
+
             break
         }
+        fromDate = timezoneDayjs.dayjsTz(fromDate)!.format('YYYY-MM-DD HH:mm:ssZ')
+        prevDate = timezoneDayjs.dayjsTz(prevDate!).format('YYYY-MM-DD HH:mm:ssZ')
+        nextDate = timezoneDayjs.dayjsTz(nextDate)!.format('YYYY-MM-DD HH:mm:ssZ')
+        toDate = timezoneDayjs.dayjsTz(toDate)!.format('YYYY-MM-DD HH:mm:ssZ')
 
-        fromDate = fromDate!.format('YYYY-MM-DD HH:mm:ssZ')
-        prevDate = prevDate!.format('YYYY-MM-DD HH:mm:ssZ')
-        nextDate = nextDate!.format('YYYY-MM-DD HH:mm:ssZ')
+        if (calDataType.value === UITypes.Date) {
+          const regex = /^\d{4}-\d{2}-\d{2}/
+          fromDate = fromDate.match(regex)[0]
+          toDate = toDate.match(regex)[0]
+          nextDate = nextDate.match(regex)[0]
+          prevDate = prevDate.match(regex)[0]
+        }
 
         calendarRange.value.forEach((range) => {
           const fromCol = range.fk_from_col
@@ -290,11 +369,22 @@ const [useProvideCalendarViewStore, useCalendarViewStore] = useInjectionState(
                 ],
               },
               {
-                fk_column_id: fromCol.id,
-                comparison_op: 'eq',
+                is_group: true,
                 logical_op: 'or',
-                comparison_sub_op: 'exactDate',
-                value: fromDate,
+                children: [
+                  {
+                    fk_column_id: fromCol.id,
+                    comparison_op: 'gte',
+                    comparison_sub_op: 'exactDate',
+                    value: fromDate as string,
+                  },
+                  {
+                    fk_column_id: fromCol.id,
+                    comparison_op: 'lte',
+                    comparison_sub_op: 'exactDate',
+                    value: toDate as string,
+                  },
+                ],
               },
             ]
             combinedFilters.push({
@@ -326,28 +416,17 @@ const [useProvideCalendarViewStore, useCalendarViewStore] = useInjectionState(
         })
       }
 
-      if (displayField.value && searchQuery.value) {
+      if (displayField.value && ncIsObject(validSearchQueryForDisplayField.value)) {
         if (combinedFilters.length > 0) {
           combinedFilters = [
             {
               is_group: true,
               logical_op: 'and',
-              children: [
-                ...combinedFilters,
-                {
-                  fk_column_id: displayField.value.id,
-                  comparison_op: 'like',
-                  value: searchQuery.value,
-                },
-              ],
+              children: [...combinedFilters, validSearchQueryForDisplayField.value],
             },
           ]
         } else {
-          combinedFilters.push({
-            fk_column_id: displayField.value.id,
-            comparison_op: 'like',
-            value: searchQuery.value,
-          })
+          combinedFilters.push(validSearchQueryForDisplayField.value)
         }
       }
 
@@ -375,7 +454,10 @@ const [useProvideCalendarViewStore, useCalendarViewStore] = useInjectionState(
               filtersArr: [...nestedFilters.value, ...sideBarFilter.value],
               offset: params.offset,
             })
-        formattedSideBarData.value = [...formattedSideBarData.value, ...formatData(response!.list)]
+        formattedSideBarData.value = [
+          ...formattedSideBarData.value,
+          ...formatData(response!.list, getEvaluatedRowMetaRowColorInfo),
+        ]
       } catch (e) {
         console.log(e)
       }
@@ -383,27 +465,34 @@ const [useProvideCalendarViewStore, useCalendarViewStore] = useInjectionState(
 
     // Fetch the dates which have records in the calendar
     const fetchActiveDates = async () => {
-      if (!base?.value?.id || !meta.value?.id || !viewMeta.value?.id || !calendarRange.value?.length) return
-      let prevDate: dayjs.Dayjs | string | null = null
-      let nextDate: dayjs.Dayjs | string | null = null
-      let fromDate: dayjs.Dayjs | string | null = null
-
-      if (activeCalendarView.value === 'week' || activeCalendarView.value === 'day' || activeCalendarView.value === 'month') {
-        const startOfMonth = pageDate.value.startOf('month')
-        const endOfMonth = pageDate.value.endOf('month')
-
-        const daysToDisplay = Math.max(endOfMonth.diff(startOfMonth, 'day') + 1, 35)
-        fromDate = startOfMonth.subtract((startOfMonth.day() + 7) % 7, 'day')
-        const toDate = fromDate.add(daysToDisplay, 'day')
-        prevDate = fromDate.subtract(1, 'day').endOf('day')
-        nextDate = toDate.add(1, 'day').startOf('day')
-      } else if (activeCalendarView.value === 'year') {
-        prevDate = selectedDate.value.startOf('year').subtract(1, 'day').endOf('day')
-        nextDate = selectedDate.value.endOf('year').add(1, 'day').startOf('day')
+      if (activeCalendarView.value === 'month') {
+        return
       }
 
-      prevDate = prevDate!.format('YYYY-MM-DD HH:mm:ssZ')
-      nextDate = nextDate!.format('YYYY-MM-DD HH:mm:ssZ')
+      if (!base?.value?.id || !meta.value?.id || !viewMeta.value?.id || !calendarRange.value?.length) return
+      let prevDate: string | null | dayjs.Dayjs = null
+      let fromDate: dayjs.Dayjs | null | string = null
+      let toDate: dayjs.Dayjs | null | string = null
+      let nextDate: string | null | dayjs.Dayjs = null
+
+      if (activeCalendarView.value === 'week' || activeCalendarView.value === 'day') {
+        const startOfMonth = timezoneDayjs.timezonize(pageDate.value.startOf('month'))
+        fromDate = timezoneDayjs.timezonize(startOfMonth.startOf('week'))
+        toDate = timezoneDayjs.timezonize(pageDate.value.endOf('month').endOf('week'))
+        prevDate = fromDate.subtract(1, 'day').endOf('day')
+        nextDate = toDate.startOf('day')
+      } else if (activeCalendarView.value === 'year') {
+        const startOfYear = timezoneDayjs.timezonize(selectedDate.value.startOf('year'))
+        fromDate = timezoneDayjs.timezonize(startOfYear.startOf('week'))
+        toDate = timezoneDayjs.timezonize(selectedDate.value.endOf('year')).endOf('week')
+        prevDate = fromDate.subtract(1, 'day').endOf('day')
+        nextDate = toDate.startOf('day')
+      }
+
+      prevDate = timezoneDayjs.dayjsTz(prevDate!).format('YYYY-MM-DD HH:mm:ssZ')
+      nextDate = timezoneDayjs.dayjsTz(nextDate)!.format('YYYY-MM-DD HH:mm:ssZ')
+      fromDate = timezoneDayjs.dayjsTz(fromDate)!.format('YYYY-MM-DD HH:mm:ssZ')
+      toDate = timezoneDayjs.dayjsTz(toDate)!.format('YYYY-MM-DD HH:mm:ssZ')
 
       if (!base?.value?.id || !meta.value?.id || !viewMeta.value?.id) return
 
@@ -411,16 +500,20 @@ const [useProvideCalendarViewStore, useCalendarViewStore] = useInjectionState(
         const res = !isPublic.value
           ? await api.dbCalendarViewRowCount.dbCalendarViewRowCount('noco', base.value.id!, meta.value!.id!, viewMeta.value.id, {
               ...queryParams.value,
-              from_date: prevDate,
-              to_date: nextDate,
+              from_date: fromDate,
+              to_date: toDate,
+              next_date: nextDate,
+              prev_date: prevDate,
             })
           : await fetchSharedViewActiveDate({
               from_date: prevDate,
               to_date: nextDate,
+              next_date: nextDate,
+              prev_date: prevDate,
               sortsArr: sorts.value,
               filtersArr: nestedFilters.value,
             })
-        activeDates.value = res.dates.map((dateObj: unknown) => dayjs(dateObj as string))
+        activeDates.value = res.dates.map((dateObj: unknown) => timezoneDayjs.timezonize(dateObj as string))
 
         if (res.count > 3000 && activeCalendarView.value !== 'year') {
           message.warning(
@@ -446,14 +539,16 @@ const [useProvideCalendarViewStore, useCalendarViewStore] = useInjectionState(
 
       try {
         activeCalendarView.value = view
-        await updateCalendarMeta({
-          meta: {
-            ...(typeof calendarMetaData.value.meta === 'string'
-              ? JSON.parse(calendarMetaData.value.meta)
-              : calendarMetaData.value.meta),
-            active_view: view,
-          },
-        })
+
+        if (isUIAllowed('calendarViewUpdate')) {
+          await updateViewMeta(viewMeta.value.id, ViewTypes.CALENDAR, {
+            meta: {
+              ...viewMetaProperties.value,
+              active_view: view,
+            },
+          })
+        }
+
         if (activeCalendarView.value === 'week') {
           selectedTime.value = null
         }
@@ -463,67 +558,14 @@ const [useProvideCalendarViewStore, useCalendarViewStore] = useInjectionState(
       }
     }
 
-    async function loadCalendarMeta() {
-      if (!viewMeta?.value?.id || !meta?.value?.columns) return
-      isCalendarMetaLoading.value = true
-      try {
-        const res = isPublic.value ? (sharedView.value?.view as CalendarType) : await $api.dbView.calendarRead(viewMeta.value.id)
-        calendarMetaData.value = res
-        const calMeta = typeof res.meta === 'string' ? JSON.parse(res.meta) : res.meta
-        activeCalendarView.value = calMeta?.active_view
-        if (!activeCalendarView.value) activeCalendarView.value = 'month'
-        calendarRange.value = res?.calendar_range
-          ?.map(
-            (
-              range: CalendarRangeType & {
-                id?: string
-              },
-            ) => {
-              const fromCol = meta.value?.columns?.find((col) => col.id === range.fk_from_column_id)
-              const toCol = range.fk_to_column_id ? meta.value?.columns?.find((col) => col.id === range.fk_to_column_id) : null
-
-              if (fromCol?.uidt === UITypes.Formula || toCol?.uidt === UITypes.Formula) {
-                // Check if fromCol Formula return type is Date
-                const isFromColDate =
-                  fromCol?.uidt === UITypes.Formula &&
-                  (fromCol?.colOptions as any)?.parsed_tree?.dataType === FormulaDataTypes.DATE
-                // Check if toCol Formula return type is Date
-
-                const isToColDate =
-                  toCol?.uidt === UITypes.Formula && (toCol?.colOptions as any)?.parsed_tree?.dataType === FormulaDataTypes.DATE
-
-                if (!isFromColDate) {
-                  message.error(`Please update the Formula column ${fromCol?.title} to return a date`)
-                  return null
-                }
-
-                if (toCol && !isToColDate) {
-                  message.error(`Please update the Formula column ${toCol?.title} to return a date`)
-                  return null
-                }
-              }
-
-              return {
-                id: range?.id,
-                fk_from_col: fromCol,
-                fk_to_col: toCol,
-                is_readonly: [fromCol, toCol].some((col) => isSystemColumn(col) || isVirtualCol(col)),
-              }
-            },
-          )
-          .filter(Boolean) as any
-      } catch (e: unknown) {
-        message.error(
-          `Error loading calendar meta ${await extractSdkResponseErrorMsg(
-            e as Error & {
-              response: { data: { message: string } }
-            },
-          )}`,
-        )
-      } finally {
-        isCalendarMetaLoading.value = false
-      }
-    }
+    const isSyncedFromColumn = computed(() => {
+      return (
+        isSyncedTable.value &&
+        calendarRange.value.some((range) => {
+          return !!range.fk_from_col?.readonly
+        })
+      )
+    })
 
     async function loadCalendarData(showLoading = true) {
       if (((!base?.value?.id || !meta.value?.id || !viewMeta.value?.id) && !isPublic?.value) || !calendarRange.value?.length)
@@ -539,39 +581,41 @@ const [useProvideCalendarViewStore, useCalendarViewStore] = useInjectionState(
       let nextDate: string | null | dayjs.Dayjs = null
 
       switch (activeCalendarView.value) {
+        case 'day':
+          prevDate = selectedDate.value.subtract(1, 'day').endOf('day')
+          nextDate = selectedDate.value.add(1, 'day').startOf('day')
+          fromDate = selectedDate.value.startOf('day')
+          toDate = selectedDate.value.endOf('day')
+          break
         case 'week':
-          fromDate = selectedDateRange.value.start.startOf('day')
-          toDate = selectedDateRange.value.end.endOf('day')
+          fromDate = selectedDateRange.value.start.startOf('week')
+          toDate = selectedDateRange.value.end.endOf('week')
 
-          prevDate = selectedDateRange.value.start.subtract(1, 'day').endOf('day')
-          nextDate = selectedDateRange.value.end.add(1, 'day').startOf('day')
+          prevDate = timezoneDayjs.timezonize(fromDate.subtract(1, 'day')).endOf('day')
+          nextDate = timezoneDayjs.timezonize(toDate.add(1, 'day')).startOf('day')
 
           // Hide weekends
           if (viewMetaProperties.value?.hide_weekend) {
-            toDate = toDate.subtract(2, 'day')
-            nextDate = nextDate.subtract(2, 'day')
+            toDate = timezoneDayjs.timezonize(toDate.subtract(2, 'day')).endOf('day')
+            nextDate = timezoneDayjs.timezonize(nextDate!.subtract(2, 'day')).startOf('day')
           }
           break
         case 'month': {
-          const startOfMonth = selectedMonth.value.startOf('month')
-          const endOfMonth = selectedMonth.value.endOf('month')
+          const startOfMonth = timezoneDayjs.timezonize(selectedMonth.value.startOf('month'))
+          const firstDayToDisplay = timezoneDayjs.timezonize(startOfMonth.startOf('week'))
+          const endOfMonth = timezoneDayjs.timezonize(selectedMonth.value.endOf('month')).endOf('week')
 
-          const daysToDisplay = Math.max(endOfMonth.diff(startOfMonth, 'day') + 1, 35)
-          fromDate = startOfMonth.subtract((startOfMonth.day() + 7) % 7, 'day')
-          toDate = fromDate.add(daysToDisplay, 'day')
+          fromDate = firstDayToDisplay
+          toDate = endOfMonth
           prevDate = fromDate.subtract(1, 'day').endOf('day')
           nextDate = toDate.add(1, 'day').startOf('day')
           break
         }
-        case 'day':
-          fromDate = selectedDate.value.startOf('day')
-          toDate = selectedDate.value.endOf('day')
-          prevDate = selectedDate.value.subtract(1, 'day').endOf('day')
-          nextDate = selectedDate.value.add(1, 'day').startOf('day')
-          break
       }
-      prevDate = prevDate!.format('YYYY-MM-DD HH:mm:ssZ')
-      nextDate = nextDate!.format('YYYY-MM-DD HH:mm:ssZ')
+      prevDate = timezoneDayjs.dayjsTz(prevDate!).format('YYYY-MM-DD HH:mm:ssZ')
+      nextDate = timezoneDayjs.dayjsTz(nextDate)!.format('YYYY-MM-DD HH:mm:ssZ')
+      fromDate = timezoneDayjs.dayjsTz(fromDate)!.format('YYYY-MM-DD HH:mm:ssZ')
+      toDate = timezoneDayjs.dayjsTz(toDate)!.format('YYYY-MM-DD HH:mm:ssZ')
 
       try {
         if (showLoading) isCalendarDataLoading.value = true
@@ -583,8 +627,11 @@ const [useProvideCalendarViewStore, useCalendarViewStore] = useInjectionState(
               meta.value!.id!,
               viewMeta.value!.id!,
               {
-                from_date: prevDate,
-                to_date: nextDate,
+                prev_date: prevDate,
+                next_date: nextDate,
+                to_date: toDate,
+                from_date: fromDate,
+                include_row_color: true,
               },
               {
                 ...queryParams.value,
@@ -595,11 +642,13 @@ const [useProvideCalendarViewStore, useCalendarViewStore] = useInjectionState(
             )
           : await fetchSharedCalendarViewData({
               sortsArr: sorts.value,
-              from_date: prevDate,
-              to_date: nextDate,
+              prev_date: prevDate,
+              next_date: nextDate,
+              to_date: toDate,
+              from_date: fromDate,
               filtersArr: nestedFilters.value,
             })
-        formattedData.value = formatData(res!.list)
+        formattedData.value = formatData(res!.list, getEvaluatedRowMetaRowColorInfo)
       } catch (e) {
         message.error(
           `${t('msg.error.fetchingCalendarData')} ${await extractSdkResponseErrorMsg(
@@ -611,32 +660,6 @@ const [useProvideCalendarViewStore, useCalendarViewStore] = useInjectionState(
         console.log(e)
       } finally {
         isCalendarDataLoading.value = false
-      }
-    }
-
-    async function updateCalendarMeta(updateObj: Partial<CalendarType>) {
-      if (!viewMeta?.value?.id || !isUIAllowed('dataEdit', { skipSourceCheck: true }) || isPublic.value) return
-
-      const updateValue = {
-        ...(typeof calendarMetaData.value.meta === 'string'
-          ? JSON.parse(calendarMetaData.value.meta)
-          : calendarMetaData.value.meta),
-        ...(typeof updateObj.meta === 'string' ? JSON.parse(updateObj.meta) : updateObj.meta),
-      }
-
-      try {
-        await $api.dbView.calendarUpdate(viewMeta.value.id, {
-          ...updateObj,
-          meta: JSON.stringify(updateValue),
-        })
-        calendarMetaData.value = {
-          ...calendarMetaData.value,
-          ...updateObj,
-          meta: updateValue,
-        }
-      } catch (e) {
-        message.error('Error updating changes')
-        console.log(e)
       }
     }
 
@@ -702,13 +725,14 @@ const [useProvideCalendarViewStore, useCalendarViewStore] = useInjectionState(
               ...{},
               ...{},
               ...{ filterArrJson: JSON.stringify([...sideBarFilter.value]) },
+              include_row_color: true,
             })
           : await fetchSharedViewData({
               sortsArr: sorts.value,
               filtersArr: [...nestedFilters.value, ...sideBarFilter.value],
             })
 
-        formattedSideBarData.value = formatData(res!.list)
+        formattedSideBarData.value = formatData(res!.list, getEvaluatedRowMetaRowColorInfo)
       } catch (e) {
         message.error(
           `${t('msg.error.fetchingCalendarData')} ${await extractSdkResponseErrorMsg(
@@ -794,6 +818,7 @@ const [useProvideCalendarViewStore, useCalendarViewStore] = useInjectionState(
             Object.assign(row.row, updatedRowData)
             Object.assign(row.oldRow, updatedRowData)
           }
+          Object.assign(row.rowMeta, getEvaluatedRowMetaRowColorInfo(row.row))
           return row
         })
 
@@ -847,11 +872,10 @@ const [useProvideCalendarViewStore, useCalendarViewStore] = useInjectionState(
     watch(activeCalendarView, async (value, oldValue) => {
       if (oldValue === 'week') {
         pageDate.value = selectedDate.value
-        selectedMonth.value = selectedTime.value ?? selectedDate.value ?? selectedDateRange.value.start
-        selectedDate.value = selectedTime.value ?? selectedDateRange.value.start
+        selectedMonth.value = selectedDate.value ?? selectedDateRange.value.start
+        selectedDate.value = selectedDate.value ?? selectedDateRange.value.start
         selectedTime.value = selectedDate.value ?? selectedDateRange.value.start
       } else if (oldValue === 'month') {
-        selectedDate.value = selectedMonth.value
         pageDate.value = selectedDate.value
         selectedTime.value = selectedDate.value
         selectedDateRange.value = {
@@ -892,7 +916,8 @@ const [useProvideCalendarViewStore, useCalendarViewStore] = useInjectionState(
       await loadSidebarData()
     })
 
-    watch(searchQuery, async () => {
+    // Load Sidebar Data when search query or field changes, `isValidFieldQuery` is used only in the frontend to show error tooltip
+    watch([() => searchQuery.value, () => displayField.value?.id], async () => {
       await loadSidebarData()
     })
 
@@ -901,8 +926,22 @@ const [useProvideCalendarViewStore, useCalendarViewStore] = useInjectionState(
       await fetchActiveDates()
     })
 
+    watch([timezone, calDataType], ([newTimezone, calDataType]) => {
+      const temp = workerWithTimezone(true, calDataType === UITypes.Date ? null : newTimezone)
+      timezoneDayjs.dayjsTz = temp.dayjsTz
+      timezoneDayjs.timezonize = temp.timezonize
+      pageDate.value = timezoneDayjs.timezonize(pageDate.value)!
+      selectedDate.value = timezoneDayjs.timezonize(selectedDate.value)!
+      selectedTime.value = timezoneDayjs.timezonize(selectedTime.value)!
+      selectedMonth.value = timezoneDayjs.timezonize(selectedMonth.value)!
+      selectedDateRange.value = {
+        start: selectedDate.value.startOf('week'),
+        end: selectedDate.value.endOf('week'),
+      }
+    })
+
     watch(
-      () => viewMetaProperties.value.hide_weekend,
+      () => viewMetaProperties.value?.hide_weekend,
       async () => {
         if (activeCalendarView.value === 'week') {
           await loadCalendarData()
@@ -910,21 +949,280 @@ const [useProvideCalendarViewStore, useCalendarViewStore] = useInjectionState(
       },
     )
 
+    /**
+     * This is used to update the rowMeta color info when the row colour info is updated
+     */
+    eventBus.on((event) => {
+      if (![SmartsheetStoreEvents.TRIGGER_RE_RENDER, SmartsheetStoreEvents.ON_ROW_COLOUR_INFO_UPDATE].includes(event)) {
+        return
+      }
+
+      formattedData.value = formattedData.value.map((row) => {
+        Object.assign(row.rowMeta, getEvaluatedRowMetaRowColorInfo(row.row))
+        return row
+      })
+
+      formattedSideBarData.value = formattedSideBarData.value.map((row) => {
+        Object.assign(row.rowMeta, getEvaluatedRowMetaRowColorInfo(row.row))
+        return row
+      })
+    })
+
+    const updateActiveDatesForNewRecord = (rowData: Record<string, any>): void => {
+      if (!calendarRange.value?.length) return
+
+      for (const range of calendarRange.value) {
+        const fromCol = range.fk_from_col
+        const toCol = range.fk_to_col
+
+        const fromDate = fromCol ? rowData[fromCol.title!] : null
+        const toDate = toCol ? rowData[toCol.title!] : null
+
+        if (fromDate) {
+          const date = timezoneDayjs.timezonize(fromDate)
+          if (!activeDates.value.some((activeDate) => activeDate.isSame(date, 'day'))) {
+            activeDates.value.push(date)
+          }
+        }
+
+        if (toDate && toDate !== fromDate) {
+          const date = timezoneDayjs.timezonize(toDate)
+          if (!activeDates.value.some((activeDate) => activeDate.isSame(date, 'day'))) {
+            activeDates.value.push(date)
+          }
+        }
+      }
+
+      // Sort active dates
+      activeDates.value.sort((a, b) => a.valueOf() - b.valueOf())
+    }
+
+    const activeDataListener = ref<string | null>(null)
+
+    watch(
+      meta,
+      (newMeta: any, oldMeta: any) => {
+        if (newMeta?.fk_workspace_id && newMeta?.base_id && newMeta?.id) {
+          if (oldMeta?.id && oldMeta.id === newMeta.id) return
+
+          if (activeDataListener.value) {
+            $ncSocket.offMessage(activeDataListener.value)
+          }
+          activeDataListener.value = $ncSocket.onMessage(
+            `${EventType.DATA_EVENT}:${newMeta.fk_workspace_id}:${newMeta.base_id}:${newMeta.id}`,
+            (data: DataPayload) => {
+              const { id, action, payload } = data
+
+              if (action === 'add') {
+                try {
+                  // For 'add', the row definitely doesn't exist yet, so we only need to check if it should be added
+                  // Check if new row should be in calendar view
+                  const shouldBeInCalendar = isRowInCurrentDateRange(
+                    payload,
+                    calendarRange.value,
+                    activeCalendarView.value!,
+                    selectedDate.value,
+                    selectedDateRange.value,
+                    selectedMonth.value,
+                    timezoneDayjs,
+                  )
+
+                  // Check if new row should be in sidebar
+                  const shouldBeInSidebar = isRowMatchingSidebarFilter(
+                    payload,
+                    sideBarFilterOption.value,
+                    calendarRange.value,
+                    selectedDate.value,
+                    selectedDateRange.value,
+                    selectedMonth.value,
+                    selectedTime.value,
+                    timezoneDayjs,
+                  )
+
+                  const newRowData = {
+                    row: payload,
+                    oldRow: { ...payload },
+                    rowMeta: {
+                      new: false,
+                      ...getEvaluatedRowMetaRowColorInfo(payload),
+                    },
+                  }
+
+                  // Add to calendar if it should be there
+                  if (shouldBeInCalendar) {
+                    formattedData.value.push({ ...newRowData })
+                  }
+
+                  // Add to sidebar if it should be there
+                  if (shouldBeInSidebar) {
+                    formattedSideBarData.value.unshift({ ...newRowData })
+                  }
+
+                  // Update active dates if any row was added
+                  if (shouldBeInCalendar || shouldBeInSidebar) {
+                    updateActiveDatesForNewRecord(payload)
+                  }
+                } catch (e) {
+                  console.error('Failed to add calendar row on socket event', e)
+                }
+              } else if (action === 'update') {
+                try {
+                  // Check if row currently exists in calendar view
+                  const calendarRowIndex = formattedData.value.findIndex((row) => {
+                    const pk = extractPkFromRow(row.row, meta.value?.columns as ColumnType[])
+                    return pk && `${pk}` === `${id}`
+                  })
+
+                  // Check if row currently exists in sidebar
+                  const sidebarRowIndex = formattedSideBarData.value.findIndex((row) => {
+                    const pk = extractPkFromRow(row.row, meta.value?.columns as ColumnType[])
+                    return pk && `${pk}` === `${id}`
+                  })
+
+                  // Check if updated row should be in current calendar view
+                  const shouldBeInCalendar = isRowInCurrentDateRange(
+                    payload,
+                    calendarRange.value,
+                    activeCalendarView.value!,
+                    selectedDate.value,
+                    selectedDateRange.value,
+                    selectedMonth.value,
+                    timezoneDayjs,
+                  )
+
+                  // Check if updated row should be in sidebar
+                  const shouldBeInSidebar = isRowMatchingSidebarFilter(
+                    payload,
+                    sideBarFilterOption.value,
+                    calendarRange.value,
+                    selectedDate.value,
+                    selectedDateRange.value,
+                    selectedMonth.value,
+                    selectedTime.value,
+                    timezoneDayjs,
+                  )
+
+                  // Handle calendar view updates
+                  if (calendarRowIndex !== -1 && shouldBeInCalendar) {
+                    // Case 1: Row exists in calendar AND should stay → Update in place
+                    const existingRow = formattedData.value[calendarRowIndex]
+                    Object.assign(existingRow.row, payload)
+                    Object.assign(existingRow.oldRow, payload)
+                    Object.assign(existingRow.rowMeta, getEvaluatedRowMetaRowColorInfo(existingRow.row))
+                    existingRow.rowMeta.changed = false
+                  } else if (calendarRowIndex !== -1 && !shouldBeInCalendar) {
+                    // Case 2: Row exists in calendar BUT should be removed → Remove from calendar
+                    formattedData.value.splice(calendarRowIndex, 1)
+                  } else if (calendarRowIndex === -1 && shouldBeInCalendar) {
+                    // Case 3: Row doesn't exist in calendar BUT should be added → Add to calendar
+                    const newCalendarRow = {
+                      row: payload,
+                      oldRow: { ...payload },
+                      rowMeta: {
+                        new: false,
+                        changed: false,
+                        ...getEvaluatedRowMetaRowColorInfo(payload),
+                      },
+                    }
+                    formattedData.value.push(newCalendarRow)
+                  } else {
+                    // Case 4: Row doesn't exist in calendar AND shouldn't be added → No action
+                  }
+
+                  // Handle sidebar updates
+                  if (sidebarRowIndex !== -1 && shouldBeInSidebar) {
+                    // Case 5: Row exists in sidebar AND should stay → Update in place
+                    const existingSidebarRow = formattedSideBarData.value[sidebarRowIndex]
+                    Object.assign(existingSidebarRow.row, payload)
+                    Object.assign(existingSidebarRow.oldRow, payload)
+                    Object.assign(existingSidebarRow.rowMeta, getEvaluatedRowMetaRowColorInfo(existingSidebarRow.row))
+                    existingSidebarRow.rowMeta.changed = false
+                  } else if (sidebarRowIndex !== -1 && !shouldBeInSidebar) {
+                    // Case 6: Row exists in sidebar BUT should be removed → Remove from sidebar
+                    formattedSideBarData.value.splice(sidebarRowIndex, 1)
+                  } else if (sidebarRowIndex === -1 && shouldBeInSidebar) {
+                    // Case 7: Row doesn't exist in sidebar BUT should be added → Add to sidebar
+                    const newSidebarRow = {
+                      row: payload,
+                      oldRow: { ...payload },
+                      rowMeta: {
+                        new: false,
+                        changed: false,
+                        ...getEvaluatedRowMetaRowColorInfo(payload),
+                      },
+                    }
+                    formattedSideBarData.value.unshift(newSidebarRow)
+                  } else {
+                    // Case 8: Row doesn't exist in sidebar AND shouldn't be added → No action
+                  }
+
+                  // Update active dates after any changes
+                  fetchActiveDates()
+                } catch (e) {
+                  console.error('Failed to update calendar row on socket event', e)
+                }
+              } else if (action === 'delete') {
+                try {
+                  // For delete, we need to remove the row from wherever it exists
+                  // We don't need to check filters since we're removing it entirely
+
+                  let removedFromCalendar = false
+                  let removedFromSidebar = false
+
+                  // Remove from calendar view if it exists there
+                  const calendarRowIndex = formattedData.value.findIndex((row) => {
+                    const pk = extractPkFromRow(row.row, meta.value?.columns as ColumnType[])
+                    return pk && `${pk}` === `${id}`
+                  })
+
+                  if (calendarRowIndex !== -1) {
+                    formattedData.value.splice(calendarRowIndex, 1)
+                    removedFromCalendar = true
+                  }
+
+                  // Remove from sidebar if it exists there
+                  const sidebarRowIndex = formattedSideBarData.value.findIndex((row) => {
+                    const pk = extractPkFromRow(row.row, meta.value?.columns as ColumnType[])
+                    return pk && `${pk}` === `${id}`
+                  })
+
+                  if (sidebarRowIndex !== -1) {
+                    formattedSideBarData.value.splice(sidebarRowIndex, 1)
+                    removedFromSidebar = true
+                  }
+                  // Update active dates if anything was removed
+                  if (removedFromCalendar || removedFromSidebar) {
+                    fetchActiveDates()
+                  }
+                } catch (e) {
+                  console.error('Failed to delete calendar row on socket event', e)
+                }
+              }
+            },
+          )
+        }
+      },
+      { immediate: true },
+    )
+
+    onBeforeUnmount(() => {
+      if (activeDataListener.value) {
+        $ncSocket.offMessage(activeDataListener.value)
+      }
+    })
+
     return {
       fetchActiveDates,
       formattedSideBarData,
       loadMoreSidebarData,
-      updateCalendarMeta,
       loadSidebarData,
       displayField,
       sideBarFilterOption,
       searchQuery,
       activeDates,
       isCalendarDataLoading,
-      isCalendarMetaLoading,
       changeCalendarView,
       calDataType,
-      loadCalendarMeta,
       calendarRange,
       loadCalendarData,
       formattedData,
@@ -942,6 +1240,9 @@ const [useProvideCalendarViewStore, useCalendarViewStore] = useInjectionState(
       paginateCalendarView,
       viewMetaProperties,
       updateFormat,
+      timezoneDayjs,
+      timezone,
+      isSyncedFromColumn,
     }
   },
 )

@@ -1,29 +1,32 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import DOMPurify from 'isomorphic-dompurify';
 import {
   AppEvents,
+  EventType,
   isCreatedOrLastModifiedByCol,
   isCreatedOrLastModifiedTimeCol,
   isLinksOrLTAR,
+  isOrderCol,
   isVirtualCol,
   ModelTypes,
   ProjectRoles,
   RelationTypes,
   UITypes,
-  ViewLockType,
 } from 'nocodb-sdk';
-import { LockType } from 'nc-gui/lib/enums';
+import { NcApiVersion } from 'nocodb-sdk';
 import { MetaDiffsService } from './meta-diffs.service';
 import { ColumnsService } from './columns.service';
 import type {
   ColumnType,
   NormalColumnRequestType,
   TableReqType,
+  TableType,
   UserType,
 } from 'nocodb-sdk';
 import type { MetaService } from '~/meta/meta.service';
 import type { LinkToAnotherRecordColumn, User, View } from '~/models';
 import type { NcContext, NcRequest } from '~/interface/config';
+import { ColumnWebhookManagerBuilder } from '~/utils/column-webhook-manager';
 import { Base, Column, Model, ModelRoleVisibility } from '~/models';
 import { AppHooksService } from '~/services/app-hooks/app-hooks.service';
 import ProjectMgrv2 from '~/db/sql-mgr/v2/ProjectMgrv2';
@@ -40,9 +43,12 @@ import {
   getUniqueColumnName,
 } from '~/helpers/getUniqueName';
 import { MetaTable } from '~/utils/globals';
+import NocoSocket from '~/socket/NocoSocket';
 
 @Injectable()
 export class TablesService {
+  protected logger = new Logger(TablesService.name);
+
   constructor(
     protected readonly metaDiffService: MetaDiffsService,
     protected readonly appHooksService: AppHooksService,
@@ -53,7 +59,7 @@ export class TablesService {
     context: NcContext,
     param: {
       tableId: any;
-      table: TableReqType & { base_id?: string };
+      table: Partial<TableReqType> & { base_id?: string };
       baseId?: string;
       user: UserType;
       req: NcRequest;
@@ -68,7 +74,7 @@ export class TablesService {
     const source = base.sources.find((b) => b.id === model.source_id);
 
     if (model.base_id !== base.id) {
-      NcError.badRequest('Model does not belong to base');
+      NcError.get(context).invalidRequestBody('Model does not belong to base');
     }
 
     // if meta/description present update and return
@@ -76,16 +82,38 @@ export class TablesService {
     if ('meta' in param.table || 'description' in param.table) {
       await Model.updateMeta(context, param.tableId, param.table);
 
+      this.appHooksService.emit(AppEvents.TABLE_UPDATE, {
+        table: param.table,
+        prevTable: model,
+        req: param.req,
+        context,
+      });
+
+      NocoSocket.broadcastEvent(
+        context,
+        {
+          event: EventType.META_EVENT,
+          payload: {
+            action: 'table_update',
+            payload: {
+              ...model,
+              ...param.table,
+            },
+          },
+        },
+        context.socket_id,
+      );
+
       return true;
     }
 
     // allow user to only update meta json data when source is restricted changes to schema
     if (source?.is_schema_readonly) {
-      NcError.sourceMetaReadOnly(source.alias);
+      NcError.get(context).sourceMetaReadOnly(source.alias);
     }
 
     if (!param.table.table_name) {
-      NcError.badRequest(
+      NcError.get(context).invalidRequestBody(
         'Missing table name `table_name` property in request body',
       );
     }
@@ -106,8 +134,24 @@ export class TablesService {
 
     // validate table name
     if (/^\s+|\s+$/.test(param.table.table_name)) {
-      NcError.badRequest(
+      NcError.get(context).invalidRequestBody(
         'Leading or trailing whitespace not allowed in table names',
+      );
+    }
+    const specialCharRegex = /[./\\]/g;
+    if (specialCharRegex.test(param.table.table_name)) {
+      const match = param.table.table_name.match(specialCharRegex);
+      NcError.get(context).invalidRequestBody(
+        'Following characters are not allowed ' +
+          match.map((m) => JSON.stringify(m)).join(', '),
+      );
+    }
+
+    const replaceCharRegex = /[$?]/g;
+    if (replaceCharRegex.test(param.table.table_name)) {
+      param.table.table_name = param.table.table_name.replace(
+        replaceCharRegex,
+        '_',
       );
     }
 
@@ -118,7 +162,12 @@ export class TablesService {
         source_id: source.id,
       }))
     ) {
-      NcError.badRequest('Duplicate table name');
+      NcError.get(context).duplicateAlias({
+        type: 'table',
+        alias: param.table.table_name,
+        base: context.base_id,
+        label: 'name',
+      });
     }
 
     if (!param.table.title) {
@@ -136,7 +185,11 @@ export class TablesService {
         source_id: source.id,
       }))
     ) {
-      NcError.badRequest('Duplicate table alias');
+      NcError.get(context).duplicateAlias({
+        type: 'table',
+        alias: param.table.title,
+        base: context.base_id,
+      });
     }
 
     const sqlMgr = await ProjectMgrv2.getSqlMgr(context, base);
@@ -148,12 +201,10 @@ export class TablesService {
       tableNameLengthLimit = 64;
     } else if (sqlClientType === 'pg') {
       tableNameLengthLimit = 63;
-    } else if (sqlClientType === 'mssql') {
-      tableNameLengthLimit = 128;
     }
 
     if (param.table.table_name.length > tableNameLengthLimit) {
-      NcError.badRequest(
+      NcError.get(context).invalidRequestBody(
         `Table name exceeds ${tableNameLengthLimit} characters`,
       );
     }
@@ -172,17 +223,64 @@ export class TablesService {
       param.table.table_name,
     );
 
+    const result = await Model.get(context, param.tableId);
+
     this.appHooksService.emit(AppEvents.TABLE_UPDATE, {
-      table: model,
-      user: param.user,
+      table: param.table,
+      prevTable: model,
       req: param.req,
+      context,
     });
+
+    NocoSocket.broadcastEvent(
+      context,
+      {
+        event: EventType.META_EVENT,
+        payload: {
+          action: 'table_update',
+          payload: result,
+        },
+      },
+      context.socket_id,
+    );
 
     return true;
   }
 
-  reorderTable(context: NcContext, param: { tableId: string; order: any }) {
-    return Model.updateOrder(context, param.tableId, param.order);
+  async reorderTable(
+    context: NcContext,
+    param: { tableId: string; order: any; req: NcRequest },
+  ) {
+    const model = await Model.get(context, param.tableId);
+
+    const res = await Model.updateOrder(context, param.tableId, param.order);
+
+    this.appHooksService.emit(AppEvents.TABLE_UPDATE, {
+      prevTable: model as TableType,
+      table: {
+        ...model,
+        order: param.order,
+      } as TableType,
+      req: param.req,
+      context,
+    } as any);
+
+    NocoSocket.broadcastEvent(
+      context,
+      {
+        event: EventType.META_EVENT,
+        payload: {
+          action: 'table_update',
+          payload: {
+            ...model,
+            order: param.order,
+          },
+        },
+      },
+      context.socket_id,
+    );
+
+    return res;
   }
 
   async tableDelete(
@@ -191,10 +289,18 @@ export class TablesService {
       tableId: string;
       user: User;
       forceDeleteRelations?: boolean;
+      forceDeleteSyncs?: boolean;
       req?: any;
     },
   ) {
     const table = await Model.getByIdOrName(context, { id: param.tableId });
+
+    if (table?.synced && !param.forceDeleteSyncs) {
+      NcError.get(context).invalidRequestBody(
+        'Synced tables cannot be deleted',
+      );
+    }
+
     await table.getColumns(context);
 
     if (table.mm) {
@@ -210,21 +316,27 @@ export class TablesService {
       // get relation column names
       const relColumns = await Promise.all(
         tables.map((t) => {
-          return t.getColumns(context).then((cols) => {
-            return cols.find((c) => {
-              return (
-                isLinksOrLTAR(c) &&
-                (c.colOptions as LinkToAnotherRecordColumn).type ===
-                  RelationTypes.MANY_TO_MANY &&
-                (c.colOptions as LinkToAnotherRecordColumn).fk_mm_model_id ===
-                  table.id
-              );
+          return t
+            .getColumns({
+              ...context,
+              base_id: t.base_id,
+              workspace_id: t.fk_workspace_id,
+            })
+            .then((cols) => {
+              return cols.find((c) => {
+                return (
+                  isLinksOrLTAR(c) &&
+                  (c.colOptions as LinkToAnotherRecordColumn).type ===
+                    RelationTypes.MANY_TO_MANY &&
+                  (c.colOptions as LinkToAnotherRecordColumn).fk_mm_model_id ===
+                    table.id
+                );
+              });
             });
-          });
         }),
       );
 
-      NcError.badRequest(
+      NcError.get(context).invalidRequestBody(
         `This is a many to many table for ${tables[0]?.title} (${relColumns[0]?.title}) & ${tables[1]?.title} (${relColumns[1]?.title}). You can disable "Show M2M tables" in base settings to avoid seeing this.`,
       );
     } else {
@@ -264,15 +376,21 @@ export class TablesService {
           c
             .getColOptions<LinkToAnotherRecordColumn>(context)
             .then((opt) => opt.getRelatedTable(context))
-            .then(),
+            .then((t) => t?.title),
         ),
       );
-      NcError.badRequest(
+      NcError.get(context).invalidRequestBody(
         `Table can't be deleted since Table is being referred in following tables : ${referredTables.join(
           ', ',
         )}. Delete LinkToAnotherRecord columns and try again.`,
       );
     }
+
+    // TODO: replace this with the one that's generated by table webhook manager
+    // currently this one is to prevent webhook to trigger when delete table
+    const columnWebhookManager = (
+      await new ColumnWebhookManagerBuilder(context).withModelId(table.id)
+    ).forDelete();
 
     // start a transaction
     const ncMeta = await (Noco.ncMeta as MetaService).startTransaction();
@@ -297,6 +415,7 @@ export class TablesService {
             columnId: c.id,
             user: param.user,
             forceDeleteSystem: true,
+            columnWebhookManager,
           },
           ncMeta,
         );
@@ -318,19 +437,34 @@ export class TablesService {
         });
       }
 
-      this.appHooksService.emit(AppEvents.TABLE_DELETE, {
-        table,
-        user: param.user,
-        ip: param.req?.clientIp,
-        req: param.req,
-      });
-
       result = await table.delete(context, ncMeta);
       await ncMeta.commit();
     } catch (e) {
       await ncMeta.rollback();
       throw e;
     }
+
+    if (result) {
+      this.appHooksService.emit(AppEvents.TABLE_DELETE, {
+        table,
+        user: param.user,
+        req: param.req,
+        context,
+      });
+
+      NocoSocket.broadcastEvent(
+        context,
+        {
+          event: EventType.META_EVENT,
+          payload: {
+            action: 'table_delete',
+            payload: table,
+          },
+        },
+        context.socket_id,
+      );
+    }
+
     return result;
   }
 
@@ -426,7 +560,7 @@ export class TablesService {
     context: NcContext,
     param: {
       baseId: string;
-      sourceId: string;
+      sourceId?: string;
       includeM2M?: boolean;
       roles: Record<string, boolean>;
     },
@@ -465,7 +599,9 @@ export class TablesService {
       sourceId?: string;
       table: TableReqType;
       user: User | UserType;
-      req?: any;
+      req: NcRequest;
+      synced?: boolean;
+      apiVersion?: NcApiVersion;
     },
   ) {
     // before validating add title for columns if only column name is present
@@ -481,13 +617,18 @@ export class TablesService {
     if (!param.table.title && param.table.table_name) {
       param.table.title = param.table.table_name;
     }
-
-    validatePayload('swagger.json#/components/schemas/TableReq', param.table);
+    validatePayload(
+      'swagger.json#/components/schemas/TableReq',
+      param.table,
+      false,
+      context,
+    );
 
     const tableCreatePayLoad: Omit<TableReqType, 'columns'> & {
       columns: (ColumnType & { cn?: string })[];
     } = {
       ...param.table,
+      ...(param.synced ? { synced: true } : {}),
     };
 
     const base = await Base.getWithInfo(context, param.baseId);
@@ -500,10 +641,12 @@ export class TablesService {
     // add CreatedTime and LastModifiedTime system columns if missing in request payload
     {
       for (const uidt of [
+        ...(param.apiVersion === NcApiVersion.V3 ? [UITypes.ID] : []),
         UITypes.CreatedTime,
         UITypes.LastModifiedTime,
         UITypes.CreatedBy,
         UITypes.LastModifiedBy,
+        UITypes.Order,
       ]) {
         const col = tableCreatePayLoad.columns.find(
           (c) => c.uidt === uidt,
@@ -528,6 +671,14 @@ export class TablesService {
             columnName = 'updated_by';
             columnTitle = 'nc_updated_by';
             break;
+          case UITypes.Order:
+            columnTitle = 'nc_order';
+            columnName = 'nc_order';
+            break;
+          case UITypes.ID:
+            columnTitle = 'Id';
+            columnName = 'id';
+            break;
         }
 
         const colName = getUniqueColumnName(
@@ -540,13 +691,13 @@ export class TablesService {
           columnTitle,
         );
 
-        if (!col || !col.system) {
+        if (!col || (!col.system && col.uidt !== UITypes.ID)) {
           tableCreatePayLoad.columns.push({
             ...(await getColumnPropsFromUIDT({ uidt } as any, source)),
             column_name: colName,
             cn: colName,
             title: colAlias,
-            system: true,
+            system: uidt !== UITypes.ID,
           });
         } else {
           // temporary fix for updating if user passed system columns with duplicate names
@@ -574,8 +725,47 @@ export class TablesService {
       }
     }
 
+    {
+      // set order of system columns in columns list
+      const orderOfSystemColumns = [
+        UITypes.ID,
+        UITypes.CreatedTime,
+        UITypes.LastModifiedTime,
+        UITypes.CreatedBy,
+        UITypes.LastModifiedBy,
+        UITypes.Order,
+      ];
+
+      tableCreatePayLoad.columns = tableCreatePayLoad.columns.sort((a, b) => {
+        const aIndex =
+          a.system || a.uidt === UITypes.ID
+            ? orderOfSystemColumns.indexOf(a.uidt as UITypes)
+            : -1;
+        const bIndex =
+          b.system || b.uidt === UITypes.ID
+            ? orderOfSystemColumns.indexOf(b.uidt as UITypes)
+            : -1;
+
+        if (aIndex === -1 && bIndex === -1) {
+          return 0;
+        }
+
+        if (aIndex === -1) {
+          return 1;
+        }
+
+        if (bIndex === -1) {
+          return -1;
+        }
+
+        return aIndex - bIndex;
+      });
+    }
+
     if (!tableCreatePayLoad.title) {
-      NcError.badRequest('Missing table `title` property in request body');
+      NcError.get(context).invalidRequestBody(
+        'Missing table `title` property in request body',
+      );
     }
 
     if (!tableCreatePayLoad.table_name) {
@@ -589,7 +779,11 @@ export class TablesService {
         source_id: source.id,
       }))
     ) {
-      NcError.badRequest('Duplicate table alias');
+      NcError.get(context).duplicateAlias({
+        type: 'table',
+        alias: tableCreatePayLoad.title,
+        base: context.base_id,
+      });
     }
 
     if (source.type === 'databricks') {
@@ -607,11 +801,28 @@ export class TablesService {
     tableCreatePayLoad.table_name = DOMPurify.sanitize(
       tableCreatePayLoad.table_name,
     );
-
     // validate table name
     if (/^\s+|\s+$/.test(tableCreatePayLoad.table_name)) {
-      NcError.badRequest(
+      NcError.get(context).invalidRequestBody(
         'Leading or trailing whitespace not allowed in table names',
+      );
+    }
+    const specialCharRegex = /[./\\]/g;
+    if (specialCharRegex.test(param.table.table_name ?? param.table.title)) {
+      const match = (param.table.title ?? param.table.table_name).match(
+        specialCharRegex,
+      );
+      NcError.get(context).invalidRequestBody(
+        'Following characters are not allowed ' +
+          match.map((m) => JSON.stringify(m)).join(', '),
+      );
+    }
+
+    const replaceCharRegex = /[$?]/g;
+    if (replaceCharRegex.test(tableCreatePayLoad.table_name)) {
+      tableCreatePayLoad.table_name = tableCreatePayLoad.table_name.replace(
+        replaceCharRegex,
+        '_',
       );
     }
 
@@ -622,7 +833,12 @@ export class TablesService {
         source_id: source.id,
       }))
     ) {
-      NcError.badRequest('Duplicate table name');
+      NcError.get(context).duplicateAlias({
+        type: 'table',
+        alias: tableCreatePayLoad.table_name,
+        base: context.base_id,
+        label: 'name',
+      });
     }
 
     if (!tableCreatePayLoad.title) {
@@ -643,12 +859,10 @@ export class TablesService {
       tableNameLengthLimit = 64;
     } else if (sqlClientType === 'pg') {
       tableNameLengthLimit = 63;
-    } else if (sqlClientType === 'mssql') {
-      tableNameLengthLimit = 128;
     }
 
     if (tableCreatePayLoad.table_name.length > tableNameLengthLimit) {
-      NcError.badRequest(
+      NcError.get(context).invalidRequestBody(
         `Table name exceeds ${tableNameLengthLimit} characters`,
       );
     }
@@ -659,14 +873,14 @@ export class TablesService {
 
     mapDefaultDisplayValue(param.table.columns);
 
+    const virtualColumns = [];
+
     for (const column of param.table.columns) {
       if (
         !isVirtualCol(column) ||
         (isCreatedOrLastModifiedTimeCol(column) && (column as any).system) ||
         (isCreatedOrLastModifiedByCol(column) && (column as any).system)
       ) {
-        const mxColumnLength = Column.getMaxColumnNameLength(sqlClientType);
-
         // set column name using title if not present
         if (!column.column_name && column.title) {
           column.column_name = column.title;
@@ -687,14 +901,14 @@ export class TablesService {
           column.column_name = targetColumnName;
         }
         uniqueColumnNameCount[column.column_name] = 1;
-      }
 
-      if (column.column_name.length > mxColumnLength) {
-        column.column_name = column.column_name.slice(0, mxColumnLength);
+        if (column.column_name.length > mxColumnLength) {
+          column.column_name = column.column_name.slice(0, mxColumnLength);
+        }
       }
 
       if (column.title && column.title.length > 255) {
-        NcError.badRequest(
+        NcError.get(context).invalidRequestBody(
           `Column title ${column.title} exceeds 255 characters`,
         );
       }
@@ -704,11 +918,17 @@ export class TablesService {
       param.table.columns
         // exclude alias columns from column list
         ?.filter((c) => {
-          return (
-            !isCreatedOrLastModifiedTimeCol(c) ||
-            !isCreatedOrLastModifiedByCol(c) ||
-            (c as any).system
-          );
+          const allowed =
+            (!isCreatedOrLastModifiedTimeCol(c) &&
+              !isCreatedOrLastModifiedByCol(c)) ||
+            (c as any).system ||
+            isOrderCol(c);
+
+          if (!allowed) {
+            virtualColumns.push(c);
+          }
+
+          return allowed;
         })
         .map(async (c) => ({
           ...(await getColumnPropsFromUIDT(c as any, source)),
@@ -746,26 +966,87 @@ export class TablesService {
     // todo: type correction
     const result = await Model.insert(context, base.id, source.id, {
       ...tableCreatePayLoad,
-      columns: tableCreatePayLoad.columns.map((c, i) => {
-        const colMetaFromDb = columns?.find((c1) => c.cn === c1.cn);
-        return {
+      columns: [
+        ...tableCreatePayLoad.columns.map((c, i) => {
+          const colMetaFromDb = columns?.find((c1) => c.cn === c1.cn);
+          return {
+            ...c,
+            uidt: c.uidt || getColumnUiType(source, colMetaFromDb || c),
+            ...(colMetaFromDb || {}),
+            title: c.title || getColumnNameAlias(c.cn, source),
+            column_name: colMetaFromDb?.cn || c.cn || c.column_name,
+            order: i + 1,
+            readonly: c.readonly || false,
+            meta: c.meta || {},
+          } as NormalColumnRequestType;
+        }),
+        ...virtualColumns.map((c, i) => ({
           ...c,
-          uidt: c.uidt || getColumnUiType(source, colMetaFromDb || c),
-          ...(colMetaFromDb || {}),
+          uidt: c.uidt || getColumnUiType(source, c),
           title: c.title || getColumnNameAlias(c.cn, source),
-          column_name: colMetaFromDb?.cn || c.cn || c.column_name,
-          order: i + 1,
-        } as NormalColumnRequestType;
-      }),
-      order: +(tables?.pop()?.order ?? 0) + 1,
+          order: tableCreatePayLoad.columns.length + i + 1,
+        })),
+      ],
     } as any);
 
+    try {
+      // create nc_order index column
+      const metaOrderColumn = tableCreatePayLoad.columns.find(
+        (c) => c.uidt === UITypes.Order,
+      );
+
+      if (!source.isMeta()) {
+        const orderColumn = columns.find(
+          (c) => c.cn === metaOrderColumn.column_name,
+        );
+
+        if (!orderColumn) {
+          throw new Error(
+            `Column ${metaOrderColumn.column_name} not found in database`,
+          );
+        }
+      }
+
+      const dbDriver = await NcConnectionMgrv2.get(source);
+
+      const baseModel = await Model.getBaseModelSQL(context, {
+        model: result,
+        source,
+        dbDriver,
+      });
+
+      await sqlClient.raw(`CREATE INDEX ?? ON ?? (??)`, [
+        `${tableCreatePayLoad.table_name}_order_idx`,
+        baseModel.getTnPath(tableCreatePayLoad.table_name),
+        metaOrderColumn.column_name,
+      ]);
+    } catch (e) {
+      this.logger.log(`Something went wrong while creating index for nc_order`);
+      this.logger.error(e);
+    }
+
     this.appHooksService.emit(AppEvents.TABLE_CREATE, {
-      table: result,
+      table: {
+        ...param.table,
+        id: result.id,
+      },
+      source,
       user: param.user,
-      ip: param.req?.clientIp,
       req: param.req,
+      context,
     });
+
+    NocoSocket.broadcastEvent(
+      context,
+      {
+        event: EventType.META_EVENT,
+        payload: {
+          action: 'table_create',
+          payload: result,
+        },
+      },
+      context.socket_id,
+    );
 
     return result;
   }

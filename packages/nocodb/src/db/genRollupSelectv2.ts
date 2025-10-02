@@ -1,49 +1,133 @@
-import { NcDataErrorCodes, RelationTypes } from 'nocodb-sdk';
-import type { BaseModelSqlv2 } from '~/db/BaseModelSqlv2';
+import { NcDataErrorCodes, RelationTypes, UITypes } from 'nocodb-sdk';
+import type { IBaseModelSqlV2 } from './IBaseModelSqlV2';
+import type { Knex } from 'knex';
 import type {
+  ButtonColumn,
+  FormulaColumn,
   LinksColumn,
   LinkToAnotherRecordColumn,
   RollupColumn,
 } from '~/models';
 import type { XKnex } from '~/db/CustomKnex';
-import type { Knex } from 'knex';
-import { Model } from '~/models';
+import { RelationManager } from '~/db/relation-manager';
+import { Column, Model } from '~/models';
+import formulaQueryBuilderv2 from '~/db/formulav2/formulaQueryBuilderv2';
+import { extractLinkRelFiltersAndApply } from '~/db/conditionV2';
 
 export default async function ({
   baseModelSqlv2,
   knex,
-  // tn,
-  // column,
   alias,
   columnOptions,
 }: {
-  baseModelSqlv2: BaseModelSqlv2;
+  baseModelSqlv2: IBaseModelSqlV2;
   knex: XKnex;
   alias?: string;
   columnOptions: RollupColumn | LinksColumn;
 }): Promise<{ builder: Knex.QueryBuilder | any }> {
   const context = baseModelSqlv2.context;
 
+  const column = await Column.get(context, {
+    colId: columnOptions.fk_column_id,
+  });
   const relationColumn = await columnOptions.getRelationColumn(context);
   const relationColumnOption: LinkToAnotherRecordColumn =
     (await relationColumn.getColOptions(context)) as LinkToAnotherRecordColumn;
-  const rollupColumn = await columnOptions.getRollupColumn(context);
-  const childCol = await relationColumnOption.getChildColumn(context);
-  const childModel = await childCol?.getModel(context);
-  const parentCol = await relationColumnOption.getParentColumn(context);
-  const parentModel = await parentCol?.getModel(context);
+
+  const { parentContext, childContext, mmContext, refContext } =
+    await relationColumnOption.getParentChildContext(context);
+
+  const rollupColumn = await columnOptions.getRollupColumn(refContext);
+  const childCol = await relationColumnOption.getChildColumn(childContext);
+  const childModel = await childCol?.getModel(childContext);
+  const parentCol = await relationColumnOption.getParentColumn(parentContext);
+  const parentModel = await parentCol?.getModel(parentContext);
   const refTableAlias = `__nc_rollup`;
 
-  const parentBaseModel = await Model.getBaseModelSQL(context, {
+  const parentBaseModel = await Model.getBaseModelSQL(parentContext, {
     model: parentModel,
     dbDriver: knex,
   });
-  const childBaseModel = await Model.getBaseModelSQL(context, {
+  const childBaseModel = await Model.getBaseModelSQL(childContext, {
     model: childModel,
     dbDriver: knex,
   });
 
-  const applyFunction = (qb: any) => {
+  const applyFunction = async (qb: any) => {
+    let selectColumnName = knex.raw('??.??', [
+      refTableAlias,
+      rollupColumn.column_name,
+    ]);
+    if (rollupColumn.uidt === UITypes.Formula) {
+      const formulOption = await rollupColumn.getColOptions<
+        FormulaColumn | ButtonColumn
+      >(context);
+
+      const formulaQb = await formulaQueryBuilderv2({
+        baseModel: RelationManager.isRelationReversed(
+          relationColumn,
+          relationColumnOption,
+        )
+          ? parentBaseModel
+          : childBaseModel,
+        tree: formulOption.formula,
+        model: RelationManager.isRelationReversed(
+          relationColumn,
+          relationColumnOption,
+        )
+          ? parentModel
+          : childModel,
+        column: rollupColumn,
+        aliasToColumn: {},
+        tableAlias: refTableAlias,
+        validateFormula: false,
+        parsedTree: formulOption.getParsedTree(),
+        baseUsers: undefined,
+      });
+
+      selectColumnName = knex.raw(formulaQb.builder).wrap('(', ')');
+    } else if (
+      [
+        UITypes.CreatedTime,
+        UITypes.CreatedBy,
+        UITypes.LastModifiedTime,
+        UITypes.LastModifiedBy,
+      ].includes(rollupColumn.uidt)
+    ) {
+      // since all field are virtual field,
+      // we use formula to generate query that can represent the column
+      // to prevent duplicate logic
+      const formulaQb = await formulaQueryBuilderv2({
+        baseModel: RelationManager.isRelationReversed(
+          relationColumn,
+          relationColumnOption,
+        )
+          ? parentBaseModel
+          : childBaseModel,
+        tree: '{{' + rollupColumn.id + '}}',
+        model: RelationManager.isRelationReversed(
+          relationColumn,
+          relationColumnOption,
+        )
+          ? parentModel
+          : childModel,
+        column: rollupColumn,
+        tableAlias: refTableAlias,
+        parsedTree: {
+          type: 'Identifier',
+          name: rollupColumn.id,
+          raw: '{{' + rollupColumn.id + '}}',
+          dataType: [UITypes.CreatedTime, UITypes.LastModifiedTime].includes(
+            rollupColumn.uidt,
+          )
+            ? 'date'
+            : 'string',
+        },
+      });
+
+      selectColumnName = knex.raw(formulaQb.builder).wrap('(', ')');
+    }
+
     // if postgres and rollup function is sum/sumDistinct/avgDistinct/avg, then cast the column to integer when type is boolean
     if (
       baseModelSqlv2.isPg &&
@@ -53,7 +137,7 @@ export default async function ({
       ['bool', 'boolean'].includes(rollupColumn.dt)
     ) {
       qb[columnOptions.rollup_function as string]?.(
-        knex.raw('??.??::integer', [refTableAlias, rollupColumn.column_name]),
+        knex.raw('??::integer', [selectColumnName]),
       );
       return;
     }
@@ -65,15 +149,11 @@ export default async function ({
     ) {
       qb.select(
         knex.raw(`COALESCE((??), 0)`, [
-          knex[columnOptions.rollup_function as string]?.(
-            knex.ref(`${refTableAlias}.${rollupColumn.column_name}`),
-          ),
+          knex[columnOptions.rollup_function as string]?.(selectColumnName),
         ]),
       );
     } else {
-      qb[columnOptions.rollup_function as string]?.(
-        knex.ref(`${refTableAlias}.${rollupColumn.column_name}`),
-      );
+      qb[columnOptions.rollup_function as string]?.(selectColumnName);
     }
   };
 
@@ -93,7 +173,16 @@ export default async function ({
         '=',
         knex.ref(`${refTableAlias}.${childCol.column_name}`),
       );
-      applyFunction(queryBuilder);
+      await applyFunction(queryBuilder);
+
+      await extractLinkRelFiltersAndApply({
+        qb: queryBuilder,
+        column,
+        alias: refTableAlias,
+        table: childBaseModel.model,
+        baseModel: childBaseModel,
+        context: childBaseModel.context,
+      });
 
       return {
         builder: queryBuilder,
@@ -116,17 +205,28 @@ export default async function ({
         knex.ref(`${refTableAlias}.${childCol.column_name}`),
       );
 
-      applyFunction(qb);
+      await extractLinkRelFiltersAndApply({
+        qb,
+        column,
+        alias: refTableAlias,
+        table: childBaseModel.model,
+        baseModel: childBaseModel,
+        context: childBaseModel.context,
+      });
+
+      await applyFunction(qb);
       return {
         builder: qb,
       };
     }
 
     case RelationTypes.MANY_TO_MANY: {
-      const mmModel = await relationColumnOption.getMMModel(context);
-      const mmChildCol = await relationColumnOption.getMMChildColumn(context);
-      const mmParentCol = await relationColumnOption.getMMParentColumn(context);
-      const assocBaseModel = await Model.getBaseModelSQL(context, {
+      const mmModel = await relationColumnOption.getMMModel(mmContext);
+      const mmChildCol = await relationColumnOption.getMMChildColumn(mmContext);
+      const mmParentCol = await relationColumnOption.getMMParentColumn(
+        mmContext,
+      );
+      const assocBaseModel = await Model.getBaseModelSQL(mmContext, {
         id: mmModel.id,
         dbDriver: knex,
       });
@@ -166,7 +266,16 @@ export default async function ({
           ),
         );
 
-      applyFunction(qb);
+      await extractLinkRelFiltersAndApply({
+        qb: qb,
+        column,
+        alias: refTableAlias,
+        table: parentBaseModel.model,
+        baseModel: parentBaseModel,
+        context: parentBaseModel.context,
+      });
+
+      await applyFunction(qb);
 
       return {
         builder: qb,

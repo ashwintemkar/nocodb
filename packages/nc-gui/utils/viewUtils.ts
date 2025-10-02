@@ -1,8 +1,8 @@
-import { ViewTypes } from 'nocodb-sdk'
+import { type RowColoringInfo, ViewTypes } from 'nocodb-sdk'
 import { iconMap } from './iconUtils'
 import type { Language } from '~/lib/types'
 import UsersIcon from '~icons/nc-icons/users'
-import LockIcon from '~icons/nc-icons/lock'
+import LockIcon from '~icons/nc-icons-v2/lock'
 import PersonalIcon from '~icons/nc-icons/personal'
 
 export const viewIcons: Record<number | string, { icon: any; color: string }> = {
@@ -13,15 +13,6 @@ export const viewIcons: Record<number | string, { icon: any; color: string }> = 
   [ViewTypes.MAP]: { icon: iconMap.map, color: 'blue' },
   [ViewTypes.KANBAN]: { icon: iconMap.kanban, color: '#FF9052' },
   view: { icon: iconMap.view, color: 'blue' },
-}
-
-export const viewTypeAlias: Record<number, string> = {
-  [ViewTypes.GRID]: 'grid',
-  [ViewTypes.FORM]: 'form',
-  [ViewTypes.GALLERY]: 'gallery',
-  [ViewTypes.KANBAN]: 'kanban',
-  [ViewTypes.MAP]: 'map',
-  [ViewTypes.CALENDAR]: 'calendar',
 }
 
 export const isRtlLang = (lang: keyof typeof Language) => ['fa', 'ar'].includes(lang)
@@ -63,4 +54,28 @@ export const viewLockIcons = {
     icon: LockIcon,
     subtitle: 'msg.info.lockedView',
   },
+}
+
+export const defaultRowColorInfo: RowColoringInfo = {
+  mode: null,
+  conditions: [],
+  fk_column_id: null,
+  color: null,
+  is_set_as_background: null,
+}
+
+export const getDefaultViewMetas = (viewType: ViewTypes) => {
+  switch (viewType) {
+    case ViewTypes.FORM:
+      return {
+        submit_another_form: false,
+        show_blank_form: false,
+        meta: {
+          hide_branding: false,
+          background_color: '#F9F9FA',
+          hide_banner: false,
+        },
+      }
+  }
+  return {}
 }

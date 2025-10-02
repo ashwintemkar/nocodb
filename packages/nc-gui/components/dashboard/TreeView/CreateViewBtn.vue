@@ -1,5 +1,5 @@
 <script lang="ts" setup>
-import { type ViewType } from 'nocodb-sdk'
+import { type TableType, viewTypeAlias } from 'nocodb-sdk'
 import { ViewTypes } from 'nocodb-sdk'
 
 const props = defineProps<{
@@ -12,17 +12,22 @@ const { $e } = useNuxtApp()
 
 const alignLeftLevel = toRef(props, 'alignLeftLevel')
 
-const { refreshCommandPalette } = useCommandPalette()
 const viewsStore = useViewsStore()
-const { loadViews, navigateToView } = viewsStore
+const { loadViews, onOpenViewCreateModal } = viewsStore
+
+const { isAiFeaturesEnabled } = useNocoAi()
 
 const table = inject(SidebarTableInj)!
 const base = inject(ProjectInj)!
 
 const isViewListLoading = ref(false)
-const toBeCreateType = ref<ViewTypes>()
+const toBeCreateType = ref<ViewTypes | 'AI'>()
 
 const isOpen = ref(false)
+
+const isSqlView = computed(() => (table.value as TableType)?.type === 'view')
+
+const isSyncedTable = computed(() => (table.value as TableType)?.synced)
 
 const overlayClassName = computed(() => {
   if (alignLeftLevel.value === 1) return 'nc-view-create-dropdown nc-view-create-dropdown-left-1'
@@ -62,7 +67,7 @@ async function onOpenModal({
   coverImageColumnId,
 }: {
   title?: string
-  type: ViewTypes
+  type: ViewTypes | 'AI'
   copyViewId?: string
   groupingFieldColumnId?: string
   calendarRange?: Array<{
@@ -72,6 +77,8 @@ async function onOpenModal({
   coverImageColumnId?: string
 }) {
   if (isViewListLoading.value) return
+
+  $e('c:view:create:navdraw', { view: type === 'AI' ? type : viewTypeAlias[type] })
 
   toBeCreateType.value = type
 
@@ -83,50 +90,17 @@ async function onOpenModal({
   isOpen.value = false
   isViewListLoading.value = false
 
-  const isDlgOpen = ref(true)
-
-  const { close } = useDialog(resolveComponent('DlgViewCreate'), {
-    'modelValue': isDlgOpen,
+  onOpenViewCreateModal({
     title,
     type,
-    'tableId': table.value.id,
-    'selectedViewId': copyViewId,
-    calendarRange,
+    copyViewId,
     groupingFieldColumnId,
+    calendarRange,
     coverImageColumnId,
-    'onUpdate:modelValue': closeDialog,
-    'onCreated': async (view: ViewType) => {
-      closeDialog()
-
-      refreshCommandPalette()
-
-      await loadViews({
-        tableId: table.value.id!,
-        force: true,
-      })
-
-      table.value.meta = {
-        ...(table.value.meta as object),
-        hasNonDefaultViews: true,
-      }
-
-      navigateToView({
-        view,
-        tableId: table.value.id!,
-        baseId: base.value.id!,
-        doNotSwitchTab: true,
-      })
-
-      $e('a:view:create', { view: view.type })
-    },
+    baseId: base.value.id!,
+    tableId: table.value.id!,
+    sourceId: table.value?.source_id,
   })
-
-  function closeDialog() {
-    isOpen.value = false
-    isDlgOpen.value = false
-
-    close(1000)
-  }
 }
 </script>
 
@@ -134,12 +108,12 @@ async function onOpenModal({
   <NcDropdown v-model:visible="isOpen" :overlay-class-name="overlayClassName" destroy-popup-on-hide @click.stop="isOpen = true">
     <slot />
     <template #overlay>
-      <NcMenu class="max-w-48">
+      <NcMenu class="max-w-48" variant="medium">
         <NcMenuItem @click.stop="onOpenModal({ type: ViewTypes.GRID })">
           <div class="item" data-testid="sidebar-view-create-grid">
             <div class="item-inner">
               <GeneralViewIcon :meta="{ type: ViewTypes.GRID }" />
-              <div>Grid</div>
+              <div>{{ $t('objects.viewType.grid') }}</div>
             </div>
 
             <GeneralLoader v-if="toBeCreateType === ViewTypes.GRID && isViewListLoading" />
@@ -147,22 +121,42 @@ async function onOpenModal({
           </div>
         </NcMenuItem>
 
-        <NcMenuItem v-if="!source.is_data_readonly" @click="onOpenModal({ type: ViewTypes.FORM })">
-          <div class="item" data-testid="sidebar-view-create-form">
-            <div class="item-inner">
-              <GeneralViewIcon :meta="{ type: ViewTypes.FORM }" />
-              <div>Form</div>
-            </div>
+        <NcTooltip
+          :title="isSyncedTable ? $t('tooltip.formViewCreationNotSupportedForSyncedTable') : $t('tooltip.sourceDataIsReadonly')"
+          :disabled="!source.is_data_readonly && !isSqlView && !isSyncedTable"
+        >
+          <NcMenuItem
+            :disabled="!!source.is_data_readonly || isSqlView || isSyncedTable"
+            @click="onOpenModal({ type: ViewTypes.FORM })"
+          >
+            <div class="item" data-testid="sidebar-view-create-form">
+              <div class="item-inner">
+                <GeneralViewIcon
+                  :meta="{ type: ViewTypes.FORM }"
+                  :class="{
+                    '!opacity-50': !!source.is_data_readonly || isSqlView || isSyncedTable,
+                  }"
+                />
+                <div>{{ $t('objects.viewType.form') }}</div>
+              </div>
 
-            <GeneralLoader v-if="toBeCreateType === ViewTypes.FORM && isViewListLoading" />
-            <GeneralIcon v-else class="plus" icon="plus" />
-          </div>
-        </NcMenuItem>
+              <GeneralLoader v-if="toBeCreateType === ViewTypes.FORM && isViewListLoading" />
+              <GeneralIcon
+                v-else
+                class="plus"
+                icon="plus"
+                :class="{
+                  '!text-current': !!source.is_data_readonly || isSqlView || isSyncedTable,
+                }"
+              />
+            </div>
+          </NcMenuItem>
+        </NcTooltip>
         <NcMenuItem @click="onOpenModal({ type: ViewTypes.GALLERY })">
           <div class="item" data-testid="sidebar-view-create-gallery">
             <div class="item-inner">
               <GeneralViewIcon :meta="{ type: ViewTypes.GALLERY }" />
-              <div>Gallery</div>
+              <div>{{ $t('objects.viewType.gallery') }}</div>
             </div>
 
             <GeneralLoader v-if="toBeCreateType === ViewTypes.GALLERY && isViewListLoading" />
@@ -173,7 +167,7 @@ async function onOpenModal({
           <div class="item">
             <div class="item-inner">
               <GeneralViewIcon :meta="{ type: ViewTypes.KANBAN }" />
-              <div>Kanban</div>
+              <div>{{ $t('objects.viewType.kanban') }}</div>
             </div>
 
             <GeneralLoader v-if="toBeCreateType === ViewTypes.KANBAN && isViewListLoading" />
@@ -191,6 +185,19 @@ async function onOpenModal({
             <GeneralIcon v-else class="plus" icon="plus" />
           </div>
         </NcMenuItem>
+        <template v-if="isAiFeaturesEnabled">
+          <NcDivider />
+          <NcTooltip :title="`Auto suggest views for ${table?.title || 'the current table'}`" placement="right">
+            <NcMenuItem data-testid="sidebar-view-create-ai" @click="onOpenModal({ type: 'AI' })">
+              <div class="item">
+                <div class="item-inner">
+                  <GeneralIcon icon="ncAutoAwesome" class="!w-4 !h-4 text-nc-fill-purple-dark" />
+                  <div>{{ $t('labels.useNocoAI') }}</div>
+                </div>
+              </div>
+            </NcMenuItem>
+          </NcTooltip>
+        </template>
       </NcMenu>
     </template>
   </NcDropdown>
@@ -206,7 +213,7 @@ async function onOpenModal({
 }
 
 .plus {
-  @apply text-gray-500;
+  @apply text-nc-content-gray-muted;
 }
 </style>
 

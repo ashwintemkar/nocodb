@@ -16,6 +16,8 @@ const { api, isLoading, error } = useApi({ useGlobalInstance: true })
 
 const { t } = useI18n()
 
+const { isEnabledOnboardingFlow, showOnboardingFlowLocalState } = useOnboardingFlow()
+
 const { navigateToTable } = useTablesStore()
 
 const { clearWorkspaces } = useWorkspace()
@@ -80,6 +82,30 @@ async function signUp() {
       const base = (user as any).createdProject
       const table = base?.tables?.[0]
 
+      if (isEnabledOnboardingFlow.value) {
+        let continueAfterOnboardingFlow = ''
+
+        if (base?.id) {
+          continueAfterOnboardingFlow = `nc/${base.id}`
+
+          if (table?.id) {
+            continueAfterOnboardingFlow += `/${table.id}`
+          }
+        }
+
+        /**
+         * Onboarding flow is shown only for new users
+         */
+        showOnboardingFlowLocalState.value = true
+
+        await navigateTo({
+          path: '/',
+          query: continueAfterOnboardingFlow ? { continueAfterOnboardingFlow } : {},
+        })
+
+        return
+      }
+
       if (base && table) {
         return await navigateToTable({
           baseId: base.id,
@@ -89,6 +115,15 @@ async function signUp() {
       }
     } catch (e) {
       console.error(e)
+    }
+
+    if (isEnabledOnboardingFlow.value) {
+      /**
+       * Onboarding flow is shown only for new users
+       */
+      showOnboardingFlowLocalState.value = true
+      await navigateTo('/')
+      return
     }
 
     await navigateTo({
@@ -119,7 +154,7 @@ onMounted(async () => {
     <NuxtLayout>
       <div class="md:bg-primary bg-opacity-5 signup h-full min-h-[600px] flex flex-col justify-center items-center">
         <div
-          class="bg-white mt-[60px] relative flex flex-col justify-center gap-2 w-full max-w-[500px] mx-auto p-8 md:(rounded-lg border-1 border-gray-200 shadow-xl)"
+          class="bg-white md:mt-[60px] relative flex flex-col justify-center gap-2 w-full max-w-[500px] mx-auto p-8 md:(rounded-lg border-1 border-gray-200 shadow-xl)"
         >
           <LazyGeneralNocoIcon class="color-transition hover:(ring ring-accent ring-opacity-100)" :animate="isLoading" />
 
@@ -151,6 +186,8 @@ onMounted(async () => {
               <a-form-item :label="$t('labels.email')" name="email" :rules="formRules.email">
                 <a-input
                   v-model:value="form.email"
+                  type="email"
+                  autocomplete="email"
                   size="large"
                   :placeholder="$t('msg.info.signUp.workEmail')"
                   @focus="resetError"
@@ -160,6 +197,7 @@ onMounted(async () => {
               <a-form-item :label="$t('labels.password')" name="password" :rules="formRules.password">
                 <a-input-password
                   v-model:value="form.password"
+                  autocomplete="new-password"
                   size="large"
                   class="password"
                   :placeholder="$t('msg.info.signUp.enterPassword')"

@@ -43,7 +43,7 @@ test.describe('GroupBy CRUD Operations', () => {
   });
 
   test('Single GroupBy CRUD Operations', async ({ page }) => {
-    await dashboard.treeView.openTable({ title: 'groupBased' });
+    await dashboard.treeView.openTable({ title: 'groupBased', baseTitle: context.base.title });
 
     await toolbar.sort.add({ title: 'Sub_Group', ascending: true, locallySaved: false });
 
@@ -77,7 +77,7 @@ test.describe('GroupBy CRUD Operations', () => {
       value: 'Zzzzzzzzzzzzzzzzzzz',
     });
 
-    await toolbar.sort.update({ index: 2, title: 'Sub_Group', ascending: false, locallySaved: false });
+    await toolbar.sort.update({ index: 1, title: 'Sub_Group', ascending: false, locallySaved: false });
 
     await dashboard.grid.groupPage.validateFirstRow({
       indexMap: [2],
@@ -110,7 +110,7 @@ test.describe('GroupBy CRUD Operations', () => {
   });
 
   test('Double GroupBy CRUD Operations', async ({ page }) => {
-    await dashboard.treeView.openTable({ title: 'groupBased' });
+    await dashboard.treeView.openTable({ title: 'groupBased', baseTitle: context.base.title });
 
     await toolbar.sort.add({ title: 'Sub_Category', ascending: true, locallySaved: false });
 
@@ -145,7 +145,7 @@ test.describe('GroupBy CRUD Operations', () => {
       value: 'Zzzzzzzzzzzzzzzzzzz',
     });
 
-    await toolbar.sort.update({ index: 3, title: 'Sub_Category', ascending: false, locallySaved: false });
+    await toolbar.sort.update({ index: 1, title: 'Sub_Category', ascending: false, locallySaved: false });
 
     await dashboard.grid.groupPage.validateFirstRow({
       indexMap: [2, 0],
@@ -178,7 +178,7 @@ test.describe('GroupBy CRUD Operations', () => {
   });
 
   test('Three GroupBy CRUD Operations', async ({ page }) => {
-    await dashboard.treeView.openTable({ title: 'groupBased' });
+    await dashboard.treeView.openTable({ title: 'groupBased', baseTitle: context.base.title });
 
     await toolbar.sort.add({ title: 'Item', ascending: true, locallySaved: false });
 
@@ -214,7 +214,7 @@ test.describe('GroupBy CRUD Operations', () => {
       value: 'Zzzzzzzzzzzzzzzzzzz',
     });
 
-    await toolbar.sort.update({ index: 4, title: 'Item', ascending: false, locallySaved: false });
+    await toolbar.sort.update({ index: 1, title: 'Item', ascending: false, locallySaved: false });
 
     await dashboard.grid.groupPage.validateFirstRow({
       indexMap: [2, 0, 0],
@@ -247,7 +247,7 @@ test.describe('GroupBy CRUD Operations', () => {
   });
 
   test('Single GroupBy CRUD Operations - Links', async ({ page }) => {
-    await dashboard.treeView.openTable({ title: 'Film' });
+    await dashboard.treeView.openTable({ title: 'Film', baseTitle: context.base.title });
 
     await toolbar.groupBy.add({ title: 'Actors', ascending: false, locallySaved: false });
 

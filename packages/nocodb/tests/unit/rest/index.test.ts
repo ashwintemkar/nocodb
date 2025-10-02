@@ -1,19 +1,24 @@
 import 'mocha';
+import { willRunOnSet } from '../utils/runOnSet';
 import authTests from './tests/auth.test';
 import orgTests from './tests/org.test';
 import baseTests from './tests/base.test';
 import columnTypeSpecificTests from './tests/columnTypeSpecific.test';
-import tableTests from './tests/table.test';
 import tableRowTests from './tests/tableRow.test';
 import viewRowTests from './tests/viewRow.test';
 import attachmentTests from './tests/attachment.test';
 import filterTest from './tests/filter.test';
-import newDataApisTest from './tests/newDataApis.test';
 import groupByTest from './tests/groupby.test';
 import formulaTests from './tests/formula.test';
 import typeCastsTest from './tests/typeCasts.test';
 import readOnlyTest from './tests/readOnlySource.test';
 import aggregationTest from './tests/aggregation.test';
+
+import dataAPIsV3Test from './tests/dataAPIsV3.test';
+import bulkV1Test from './tests/bulk-v1.test';
+import metaTestV3 from './tests/metaApiV3/index.test';
+import tableTests from './tests/meta-apis/table.test';
+import { paymentTest } from './tests/payment/payment.test';
 
 let workspaceTest = () => {};
 let ssoTest = () => {};
@@ -29,35 +34,41 @@ if (process.env.EE === 'true') {
   columnTest = require('./tests/ee/column.test').default;
   integrationTest = require('./tests/ee/integration.test').default;
 }
-// import layoutTests from './tests/layout.test';
-// import widgetTest from './tests/widget.test';
+
+const testVersion = ['v1', 'v2', 'v3'];
 
 function restTests() {
-  authTests();
-  orgTests();
-  baseTests();
-  tableTests();
-  tableRowTests();
-  viewRowTests();
-  columnTypeSpecificTests();
-  attachmentTests();
-  filterTest();
-  newDataApisTest();
-  groupByTest();
-  workspaceTest();
-  formulaTests();
-  ssoTest();
-  cloudOrgTest();
-  typeCastsTest();
-  readOnlyTest();
-  aggregationTest();
-  bulkAggregationTest();
-  columnTest();
-  integrationTest();
+  if (willRunOnSet(1)) {
+    authTests();
+    orgTests();
+    baseTests();
+    tableRowTests();
+    viewRowTests();
+    columnTypeSpecificTests();
+    attachmentTests();
+    filterTest();
+    groupByTest();
+    workspaceTest();
+    formulaTests();
+    ssoTest();
+    cloudOrgTest();
+    typeCastsTest();
+    readOnlyTest();
+    aggregationTest();
+    bulkAggregationTest();
+    columnTest();
+    integrationTest();
+    paymentTest();
+    bulkV1Test();
+  }
 
-  // Enable for dashboard feature
-  // widgetTest();
-  // layoutTests();
+  if (testVersion.includes('v1')) tableTests('v1');
+  if (testVersion.includes('v2')) dataAPIsV3Test('v2');
+
+  // v3 API tests
+  if (testVersion.includes('v3')) {
+    metaTestV3();
+  }
 }
 
 export default function () {

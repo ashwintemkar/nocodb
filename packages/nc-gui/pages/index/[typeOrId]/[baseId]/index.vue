@@ -4,8 +4,6 @@ definePageMeta({
   hasSidebar: true,
 })
 
-useTheme()
-
 const { t } = useI18n()
 
 const { $e } = useNuxtApp()
@@ -100,7 +98,6 @@ useEventListener(document, 'keydown', async (e: KeyboardEvent) => {
   <div>
     <div>
       <NuxtPage />
-      <LazyGeneralPreviewAs float />
     </div>
   </div>
 </template>

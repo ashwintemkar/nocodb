@@ -266,6 +266,11 @@ onMounted(() => {
     })
   }
 })
+
+const { message: templatedMessage } = useTemplatedMessage(
+  computed(() => sharedFormView?.value?.success_msg),
+  computed(() => formState.value),
+)
 </script>
 
 <template>
@@ -293,8 +298,8 @@ onMounted(() => {
               >
                 <template #message>
                   <LazyCellRichText
-                    v-if="sharedFormView?.success_msg?.trim()"
-                    :value="sharedFormView?.success_msg"
+                    v-if="templatedMessage"
+                    :value="templatedMessage"
                     class="!h-auto -ml-1"
                     is-form-field
                     read-only
@@ -304,7 +309,7 @@ onMounted(() => {
                     {{ $t('msg.info.thankYou') }}
                   </span>
                 </template>
-                <template v-if="!sharedFormView?.success_msg?.trim()" #description>
+                <template v-if="!templatedMessage" #description>
                   {{ $t('msg.info.submittedFormData') }}
                 </template>
 
@@ -361,7 +366,7 @@ onMounted(() => {
                     data-testid="nc-survey-form__fill-form-btn"
                     @click="onStart()"
                   >
-                    Fill Form
+                    {{ $t('labels.fillForm') }}
                   </NcButton>
                 </div>
               </div>
@@ -411,7 +416,7 @@ onMounted(() => {
                     <a-form-item
                       v-if="field.title && fieldMappings[field.title]"
                       :name="fieldMappings[field.title]"
-                      class="!my-0 nc-input-required-error"
+                      class="nc-input-required-error"
                       v-bind="validateInfos[fieldMappings[field.title]]"
                     >
                       <SmartsheetDivDataCell class="relative nc-form-data-cell" @click.stop="handleFocus">
@@ -440,18 +445,18 @@ onMounted(() => {
                           :read-only="field?.read_only"
                           @update:model-value="validateField(field.title)"
                         />
+                        <template v-if="field.uidt === UITypes.LongText" #help>
+                          <div class="flex flex-col gap-2 text-slate-500 dark:text-slate-300 text-xs mt-2">
+                            <div class="hidden text-sm text-gray-500 md:flex flex-wrap items-center">
+                              {{ $t('general.shift') }} <span class="text-primary"> &nbsp;⇧&nbsp; </span> +
+                              {{ $t('general.enter') }}
+                              <span class="text-primary"> &nbsp;↵&nbsp; </span>
+                              {{ $t('msg.info.makeLineBreak') }}
+                            </div>
+                          </div>
+                        </template>
                       </SmartsheetDivDataCell>
                     </a-form-item>
-                    <div class="flex flex-col gap-2 text-slate-500 dark:text-slate-300 text-xs my-2 px-1">
-                      <div
-                        v-if="field.uidt === UITypes.LongText"
-                        class="hidden text-sm text-gray-500 md:flex flex-wrap items-center"
-                      >
-                        {{ $t('general.shift') }} <MdiAppleKeyboardShift class="mx-1 text-primary" /> + {{ $t('general.enter') }}
-                        <MaterialSymbolsKeyboardReturn class="mx-1 text-primary" />
-                        {{ $t('msg.info.makeLineBreak') }}
-                      </div>
-                    </div>
                   </NcTooltip>
                 </div>
 
@@ -469,7 +474,7 @@ onMounted(() => {
                         data-testid="nc-survey-form__btn-submit-confirm"
                         @click="showSubmitConfirmModal"
                       >
-                        {{ $t('general.submit') }} form
+                        {{ $t('general.submit') }} {{ $t('objects.viewType.form') }}
                       </NcButton>
                     </div>
 
@@ -502,7 +507,7 @@ onMounted(() => {
           </Transition>
         </template>
       </div>
-      <div class="lg:(absolute bottom-0 left-0 right-0 px-4 pb-4) lg:px-10 lg:pb-10 pointer-events-none">
+      <div class="lg:(absolute bottom-0 right-0 px-4 pb-4) lg:px-10 lg:pb-10">
         <div class="flex justify-end items-center gap-4 nc-survey-form-branding">
           <div class="flex justify-center">
             <GeneralFormBranding
@@ -568,6 +573,18 @@ onMounted(() => {
 </template>
 
 <style lang="scss" scoped>
+:deep(.ant-form-item.nc-input-required-error) {
+  @apply !mt-0;
+
+  &:not(.ant-form-item-with-help) {
+    @apply !mb-7;
+  }
+
+  .ant-form-item-explain {
+    @apply !min-h-7;
+  }
+}
+
 .nc-input-required-error {
   max-width: 100%;
   white-space: pre-line;

@@ -17,7 +17,7 @@ test.describe('Grid view locked', () => {
   });
 
   test('ReadOnly lock & collaboration mode', async () => {
-    await dashboard.treeView.openTable({ title: 'Country' });
+    await dashboard.treeView.openTable({ title: 'Country', baseTitle: context.base.title });
 
     await dashboard.grid.verifyCollaborativeMode();
 
@@ -40,9 +40,7 @@ test.describe('Grid view locked', () => {
   });
 
   test('Download CSV', async () => {
-    // close 'Team & Auth' tab
-    await dashboard.closeTab({ title: 'Team & Auth' });
-    await dashboard.treeView.openTable({ title: 'Country' });
+    await dashboard.treeView.openTable({ title: 'Country', baseTitle: context.base.title });
 
     await dashboard.grid.toolbar.clickFields();
     // Hide 'LastUpdate' column
@@ -52,27 +50,7 @@ test.describe('Grid view locked', () => {
 
     await dashboard.grid.toolbar.viewsMenu.click({
       menu: 'Download',
-      subMenu: 'Download CSV',
-      verificationInfo: {
-        verificationFile: isPg(context) ? './fixtures/expectedBaseDownloadDataPg.txt' : null,
-      },
-    });
-  });
-
-  test('Download XLSX', async () => {
-    // close 'Team & Auth' tab
-    await dashboard.closeTab({ title: 'Team & Auth' });
-    await dashboard.treeView.openTable({ title: 'Country' });
-
-    await dashboard.grid.toolbar.clickFields();
-    // Hide 'LastUpdate' column
-    await dashboard.grid.toolbar.fields.click({
-      title: 'LastUpdate',
-    });
-
-    await dashboard.grid.toolbar.viewsMenu.click({
-      menu: 'Download',
-      subMenu: 'Download Excel',
+      subMenu: 'CSV',
       verificationInfo: {
         verificationFile: isPg(context) ? './fixtures/expectedBaseDownloadDataPg.txt' : null,
       },

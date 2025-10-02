@@ -3,22 +3,21 @@ import tinycolor from 'tinycolor2'
 
 const props = withDefaults(
   defineProps<{
-    type?: typeof NcProjectType | string
     modelValue?: string
     size?: 'xsmall' | 'small' | 'medium' | 'large' | 'xlarge'
     readonly?: boolean
     iconClass?: string
   }>(),
   {
-    type: NcProjectType.DB,
     size: 'small',
+    iconClass: '',
   },
 )
 
 const emit = defineEmits(['update:modelValue'])
 
-const { modelValue } = toRefs(props)
-const { size, readonly } = props
+const { modelValue, readonly } = toRefs(props)
+const { size } = props
 
 const isOpen = ref(false)
 
@@ -32,7 +31,7 @@ const updateIconColor = (color: string) => {
 }
 
 const onClick = (e: Event) => {
-  if (readonly) return
+  if (readonly.value) return
 
   e.stopPropagation()
 
@@ -56,7 +55,7 @@ watch(
   <div>
     <a-dropdown v-model:visible="isOpen" :trigger="['click']" :disabled="readonly">
       <div
-        class="flex flex-row justify-center items-center select-none rounded-md nc-base-icon-picker-trigger"
+        class="flex flex-row justify-center items-center select-none rounded nc-base-icon-picker-trigger"
         :class="{
           'hover:bg-gray-500 hover:bg-opacity-15 cursor-pointer': !readonly,
           'bg-gray-500 bg-opacity-15': isOpen,
@@ -68,11 +67,11 @@ watch(
         }"
         @click="onClick"
       >
-        <NcTooltip placement="topLeft" :disabled="readonly">
+        <NcTooltip placement="topLeft" :disabled="readonly || isOpen">
           <template #title> {{ $t('tooltip.changeIconColour') }} </template>
 
           <div>
-            <GeneralProjectIcon :color="colorRef" :type="type" />
+            <GeneralProjectIcon :color="colorRef" :class="iconClass" />
           </div>
         </NcTooltip>
       </div>

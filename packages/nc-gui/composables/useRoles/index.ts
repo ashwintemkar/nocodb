@@ -71,7 +71,13 @@ export const useRolesShared = createSharedComposable(() => {
 
   async function loadRoles(
     baseId?: string,
-    options: { isSharedBase?: boolean; sharedBaseId?: string; isSharedErd?: boolean; sharedErdId?: string } = {},
+    options: {
+      isSharedBase?: boolean
+      sharedBaseId?: string
+      isSharedErd?: boolean
+      sharedErdId?: string
+      skipUpdatingUser?: boolean
+    } = {},
   ) {
     if (options?.isSharedBase) {
       const res = await api.auth.me(
@@ -85,10 +91,12 @@ export const useRolesShared = createSharedComposable(() => {
         },
       )
 
+      if (options.skipUpdatingUser) return res
       user.value = {
         ...user.value,
         roles: res.roles,
         base_roles: res.base_roles,
+        meta: res.meta,
       } as User
     } else if (options?.isSharedErd) {
       const res = await api.auth.me(
@@ -102,10 +110,12 @@ export const useRolesShared = createSharedComposable(() => {
         },
       )
 
+      if (options.skipUpdatingUser) return res
       user.value = {
         ...user.value,
         roles: res.roles,
         base_roles: res.base_roles,
+        meta: res.meta,
       } as User
     } else if (baseId) {
       const res = await api.auth.me({ base_id: baseId })
@@ -115,15 +125,22 @@ export const useRolesShared = createSharedComposable(() => {
         roles: res.roles,
         base_roles: res.base_roles,
         display_name: res.display_name,
+        meta: res.meta,
       } as User
     } else {
       const res = await api.auth.me({})
 
+      if (options.skipUpdatingUser) return res
       user.value = {
         ...user.value,
         roles: res.roles,
         base_roles: res.base_roles,
         display_name: res.display_name,
+        meta: res.meta,
+        /**
+         * Add `is_new_user` in user object only if it is dashboard
+         */
+        is_new_user: res.is_new_user,
       } as User
     }
   }
@@ -172,7 +189,9 @@ export const useRolesShared = createSharedComposable(() => {
     )
   }
 
-  return { allRoles, orgRoles, workspaceRoles, baseRoles, loadRoles, isUIAllowed }
+  const isBaseRolesLoaded = computed(() => !!user.value?.base_roles || !!user.value?.workspace_roles)
+
+  return { allRoles, orgRoles, workspaceRoles, baseRoles, loadRoles, isUIAllowed, isBaseRolesLoaded }
 })
 
 type IsUIAllowedParams = Parameters<ReturnType<typeof useRolesShared>['isUIAllowed']>

@@ -1,21 +1,25 @@
 <script setup lang="ts">
 const { sharedViewMeta, sharedFormView } = useSharedFormStoreOrThrow()
 
-const isDark = useDark()
-
 const route = useRoute()
 
 const router = useRouter()
 
-onMounted(() => {
-  isDark.value = false
-})
-
 const shouldRedirect = (to: string) => {
   if (sharedViewMeta.value.surveyMode) {
-    if (!to.includes('survey')) navigateTo(`/nc/form/${route.params.viewId}/survey`)
+    if (!to.includes('survey')) {
+      navigateTo({
+        path: `/nc/form/${route.params.viewId}/survey`,
+        query: route.query,
+      })
+    }
   } else {
-    if (to.includes('survey')) navigateTo(`/nc/form/${route.params.viewId}`)
+    if (to.includes('survey')) {
+      navigateTo({
+        path: `/nc/form/${route.params.viewId}`,
+        query: route.query,
+      })
+    }
   }
 }
 
@@ -26,7 +30,7 @@ router.afterEach((to) => shouldRedirect(to.name as string))
 
 <template>
   <div
-    class="scrollbar-thin scrollbar-track-transparent scrollbar-thumb-gray-200 hover-scrollbar-thumb-gray-300 h-[100vh] overflow-y-auto overflow-x-hidden flex flex-col color-transition p-4 lg:p-6 nc-form-view min-h-[600px]"
+    class="scrollbar-thin scrollbar-track-transparent scrollbar-thumb-gray-200 hover-scrollbar-thumb-gray-300 nc-h-screen overflow-y-auto overflow-x-hidden flex flex-col color-transition p-4 lg:p-6 nc-form-view min-h-[600px]"
     :class="{
       'children:(!h-auto my-auto)': sharedViewMeta?.surveyMode,
     }"
@@ -103,7 +107,7 @@ p {
           }
         }
         &.layout-list {
-          @apply h-auto !pl-0 !py-1 !bg-transparent !dark:bg-none;
+          @apply h-auto !p-0 !bg-transparent !dark:bg-none;
         }
 
         .duration-cell-wrapper {
@@ -170,13 +174,24 @@ p {
         }
         &.nc-cell:not(.nc-cell-longtext) {
           @apply p-2;
+
+          &.nc-cell-phonenumber,
+          &.nc-cell-email,
+          &.nc-cell-url {
+            .nc-cell-field.nc-cell-link-preview {
+              @apply px-3;
+            }
+          }
+
+          &.nc-cell-attachment {
+            @apply pl-1;
+          }
         }
         &.nc-virtual-cell {
           @apply px-2 py-1;
         }
 
         &.nc-cell-json {
-          @apply h-auto;
           & > div {
             @apply w-full;
           }

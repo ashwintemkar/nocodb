@@ -19,7 +19,7 @@ const { toggleRead, deleteNotification } = notificationStore
   <div class="flex pl-6 pr-4 w-full overflow-x-hidden group py-4 hover:bg-gray-50 gap-3 relative cursor-pointer">
     <div class="w-9.625">
       <slot name="avatar">
-        <img src="~assets/img/brand/nocodb-logo.svg" alt="NocoDB" class="w-8" />
+        <GeneralIcon icon="nocodb1" class="w-8 h-8" />
       </slot>
     </div>
 
@@ -53,21 +53,20 @@ const { toggleRead, deleteNotification } = notificationStore
           '!opacity-100': isMobileMode,
         }"
         class="transition-all duration-100 opacity-0 !group-hover:opacity-100"
+        placement="bottomRight"
       >
         <NcButton size="xsmall" type="secondary" @click.stop>
           <GeneralIcon icon="threeDotVertical" />
         </NcButton>
 
         <template #overlay>
-          <NcMenu>
+          <NcMenu variant="small">
             <NcMenuItem @click.stop="() => toggleRead(item)"> Mark as unread </NcMenuItem>
             <NcDivider />
-            <NcMenuItem class="!text-red-500 !hover:bg-red-50" @click.stop="deleteNotification(item)"> Delete </NcMenuItem>
+            <NcMenuItem danger @click.stop="deleteNotification(item)"> Delete </NcMenuItem>
           </NcMenu>
         </template>
       </NcDropdown>
     </div>
   </div>
 </template>
-
-<style scoped lang="scss"></style>

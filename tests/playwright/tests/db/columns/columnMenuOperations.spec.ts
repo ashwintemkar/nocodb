@@ -55,7 +55,7 @@ test.describe('Column menu operations', () => {
   });
 
   test('Duplicate fields', async () => {
-    await dashboard.treeView.openTable({ title: 'Film' });
+    await dashboard.treeView.openTable({ title: 'Film', baseTitle: context.base.title });
 
     for (const { title, type } of columns) {
       // Use sakila db fields instead of creating new
@@ -73,11 +73,10 @@ test.describe('Column menu operations', () => {
         expectedTitle: `${title} copy_1`,
       });
     }
-    await dashboard.closeTab({ title: 'Film' });
   });
 
   test('Insert after', async () => {
-    await dashboard.treeView.openTable({ title: 'Film' });
+    await dashboard.treeView.openTable({ title: 'Film', baseTitle: context.base.title });
 
     await dashboard.grid.column.create({
       title: 'InsertAfterColumn',
@@ -90,12 +89,10 @@ test.describe('Column menu operations', () => {
       type: 'SingleLineText',
       insertAfterColumnTitle: 'Title',
     });
-
-    await dashboard.closeTab({ title: 'Film' });
   });
 
   test('Insert before', async () => {
-    await dashboard.treeView.openTable({ title: 'Film' });
+    await dashboard.treeView.openTable({ title: 'Film', baseTitle: context.base.title });
 
     await dashboard.grid.column.create({
       title: 'InsertBeforeColumn',
@@ -110,12 +107,10 @@ test.describe('Column menu operations', () => {
       type: 'SingleLineText',
       insertBeforeColumnTitle: 'ReleaseYear',
     });
-
-    await dashboard.closeTab({ title: 'Film' });
   });
 
   test('Hide column', async () => {
-    await dashboard.treeView.openTable({ title: 'Film' });
+    await dashboard.treeView.openTable({ title: 'Film', baseTitle: context.base.title });
 
     await dashboard.grid.column.hideColumn({
       title: 'Title',
@@ -126,12 +121,10 @@ test.describe('Column menu operations', () => {
     await dashboard.grid.column.hideColumn({
       title: 'RentalDuration',
     });
-
-    await dashboard.closeTab({ title: 'Film' });
   });
 
   test('Sort column', async () => {
-    await dashboard.treeView.openTable({ title: 'Film' });
+    await dashboard.treeView.openTable({ title: 'Film', baseTitle: context.base.title });
 
     await dashboard.grid.column.sortColumn({
       title: 'Title',
@@ -142,7 +135,5 @@ test.describe('Column menu operations', () => {
       title: 'ReleaseYear',
       direction: 'desc',
     });
-
-    await dashboard.closeTab({ title: 'Film' });
   });
 });

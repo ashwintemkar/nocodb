@@ -1,4 +1,12 @@
-import type { AttachmentResType, UserType } from 'nocodb-sdk';
+import type { AttachmentUrlUploadParam } from '~/types/data-columns/attachment';
+import type {
+  AttachmentResType,
+  PublicAttachmentScope,
+  SnapshotType,
+  SupportedExportCharset,
+  SyncTrigger,
+  UserType,
+} from 'nocodb-sdk';
 import type { NcContext, NcRequest } from '~/interface/config';
 export const JOBS_QUEUE = 'jobs';
 
@@ -7,12 +15,18 @@ export enum MigrationJobTypes {
   Thumbnail = 'thumbnail',
   RecoverLinks = 'recover-links',
   CleanupDuplicateColumns = 'cleanup-duplicate-columns',
+  NoOpMigration = 'no-op-migration',
+  OrderColumnCreation = 'order-column-creation',
+  RecoverOrderColumnMigration = 'recover-order-column-migration',
+  RecoverDisconnectedTableNames = 'recover-disconnected-table-names',
+  AuditMigration = 'audit-migration',
 }
 
 export enum JobTypes {
   DuplicateBase = 'duplicate-base',
   DuplicateModel = 'duplicate-model',
   DuplicateColumn = 'duplicate-column',
+  DuplicateDashboard = 'duplicate-dashboard',
   AtImport = 'at-import',
   MetaSync = 'meta-sync',
   SourceCreate = 'source-create',
@@ -24,10 +38,36 @@ export enum JobTypes {
   HandleWebhook = 'handle-webhook',
   CleanUp = 'clean-up',
   DataExport = 'data-export',
+  DataExportCleanUp = 'data-export-clean-up',
   ThumbnailGenerator = 'thumbnail-generator',
   AttachmentCleanUp = 'attachment-clean-up',
   InitMigrationJobs = 'init-migration-jobs',
+  UseWorker = 'use-worker',
+  CreateSnapshot = 'create-snapshot',
+  RestoreSnapshot = 'restore-snapshot',
+  ListenImport = 'listen-import',
+  SyncModuleSyncData = 'sync-module-sync-data',
+  SyncModuleMigrateSync = 'sync-module-migrate-sync',
+  SyncModuleRefreshData = 'sync-module-refresh-data',
+  SyncModuleSchedule = 'sync-module-schedule',
+  UpdateUsageStats = 'update-usage-stats',
+  CloudDbMigrate = 'cloud-db-migrate',
+  AttachmentUrlUpload = 'attachment-url-upload',
+  ExecuteAction = 'execute-action',
 }
+
+export const SKIP_STORING_JOB_META = [
+  JobTypes.HealthCheck,
+  JobTypes.ThumbnailGenerator,
+  JobTypes.UseWorker,
+  JobTypes.HandleWebhook,
+  JobTypes.InitMigrationJobs,
+  JobTypes.UpdateModelStat,
+  JobTypes.UpdateWsStat,
+  JobTypes.UpdateSrcStat,
+  JobTypes.UpdateUsageStats,
+  JobTypes.SyncModuleSchedule,
+];
 
 export enum JobStatus {
   COMPLETED = 'completed',
@@ -47,7 +87,9 @@ export enum JobEvents {
 
 export const JobVersions: {
   [key in JobTypes]?: number;
-} = {};
+} = {
+  [JobTypes.InitMigrationJobs]: 2,
+};
 
 export const JOB_REQUEUED = 'job.requeued';
 
@@ -61,8 +103,9 @@ export const InstanceTypes = {
 export enum InstanceCommands {
   RESUME_LOCAL = 'resumeLocal',
   PAUSE_LOCAL = 'pauseLocal',
-  RESET = 'reset',
   RELEASE = 'release',
+  ASSIGN_WORKER_GROUP = 'assignWorkerGroup',
+  STOP_OTHER_WORKER_GROUPS = 'stopOtherWorkerGroups',
 }
 
 export interface JobData {
@@ -91,6 +134,7 @@ export interface AtImportJobData extends JobData {
     syncRollup?: boolean;
     syncUsers?: boolean;
     syncData?: boolean;
+    syncFormula?: boolean;
   };
   user: any;
 }
@@ -103,11 +147,16 @@ export interface DuplicateBaseJobData extends JobData {
     excludeData?: boolean;
     excludeViews?: boolean;
     excludeHooks?: boolean;
+    excludeComments?: boolean;
+    excludeUsers?: boolean;
+    excludeScripts?: boolean;
+    excludeDashboards?: boolean;
   };
 }
 
 export interface DuplicateModelJobData extends JobData {
   sourceId: string;
+  targetSourceId: string;
   modelId: string;
   title: string;
   req: NcRequest;
@@ -115,6 +164,9 @@ export interface DuplicateModelJobData extends JobData {
     excludeData?: boolean;
     excludeViews?: boolean;
     excludeHooks?: boolean;
+    excludeComments?: boolean;
+    targetBaseId?: string;
+    targetWorkspaceId?: string;
   };
 }
 
@@ -128,10 +180,18 @@ export interface DuplicateColumnJobData extends JobData {
   };
 }
 
+export interface DuplicateDashboardJobData extends JobData {
+  dashboardId: string;
+  req: NcRequest;
+  options: never;
+}
+
 export interface HandleWebhookJobData extends JobData {
   hookId: string;
   modelId: string;
   viewId: string;
+  hookName: string;
+  ncSiteUrl: string;
   prevData;
   newData;
 }
@@ -140,6 +200,7 @@ export interface DataExportJobData extends JobData {
   options?: {
     delimiter?: string;
     extension_id?: string;
+    encoding?: SupportedExportCharset;
   };
   modelId: string;
   viewId: string;
@@ -149,4 +210,41 @@ export interface DataExportJobData extends JobData {
 
 export interface ThumbnailGeneratorJobData extends JobData {
   attachments: AttachmentResType[];
+  scope?: PublicAttachmentScope;
+}
+
+export interface CreateSnapshotJobData extends JobData {
+  sourceId: string;
+  snapshotBaseId: string;
+  req: NcRequest;
+  snapshot: SnapshotType;
+}
+
+export interface RestoreSnapshotJobData extends JobData {
+  sourceId: string;
+  targetBaseId: string;
+  targetContext: {
+    workspace_id: string;
+    base_id: string;
+  };
+  snapshot: SnapshotType;
+  req: NcRequest;
+}
+
+export interface SyncDataSyncModuleJobData extends JobData {
+  syncConfigId: string;
+  targetTables?: string[];
+  trigger: SyncTrigger;
+  bulk?: boolean;
+  req: NcRequest;
+}
+
+export type AttachmentUrlUploadJobData = AttachmentUrlUploadParam & JobData;
+
+export interface ExecuteActionJobData extends JobData {
+  req: NcRequest;
+  records?: any[];
+  modelId?: string;
+  viewId?: string;
+  scriptId: string;
 }

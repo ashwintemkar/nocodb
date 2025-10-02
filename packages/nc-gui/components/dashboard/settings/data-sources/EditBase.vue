@@ -1,6 +1,6 @@
 <script lang="ts" setup>
-import { type SourceType, validateAndExtractSSLProp } from 'nocodb-sdk'
-import { Form, message } from 'ant-design-vue'
+import { IntegrationsType, type SourceType, validateAndExtractSSLProp } from 'nocodb-sdk'
+import { Form } from 'ant-design-vue'
 import {
   ClientType,
   type DatabricksConnection,
@@ -27,6 +27,8 @@ const _projectId = inject(ProjectIdInj, undefined)
 const baseId = computed(() => _projectId?.value ?? base.value?.id)
 
 const { refreshCommandPalette } = useCommandPalette()
+
+const filteredIntegrations = computed(() => integrations.value.filter((i) => i.sub_type !== SyncDataType.NOCODB))
 
 const useForm = Form.useForm
 
@@ -110,8 +112,7 @@ const validators = computed(() => {
       : {
           'dataSource.connection.database':
             selectedIntegration.value && getDataSourceValue('database') ? [] : [fieldRequiredValidator()],
-          ...([ClientType.PG, ClientType.MSSQL].includes(formState.value.dataSource.client) &&
-          formState.value.dataSource.searchPath
+          ...([ClientType.PG].includes(formState.value.dataSource.client) && formState.value.dataSource.searchPath
             ? {
                 'dataSource.searchPath.0':
                   selectedIntegration.value && getDataSourceValue('schema') ? [] : [fieldRequiredValidator()],
@@ -282,7 +283,7 @@ onMounted(async () => {
   isLoading.value = true
 
   if (!integrations.value.length) {
-    await loadIntegrations(true, base.value?.id)
+    await loadIntegrations(IntegrationsType.Database, base.value?.id)
   }
 
   if (base.value?.id) {
@@ -317,7 +318,7 @@ onMounted(async () => {
 watch(
   () => formState.value.dataSource.searchPath,
   (val) => {
-    if ([ClientType.PG, ClientType.MSSQL].includes(formState.value.dataSource.client) && !val) {
+    if ([ClientType.PG].includes(formState.value.dataSource.client) && !val) {
       formState.value.dataSource.searchPath = []
     }
   },
@@ -411,7 +412,11 @@ function handleAutoScroll(scroll: boolean, className: string) {
                         show-search
                         dropdown-match-select-width
                       >
-                        <a-select-option v-for="integration in integrations" :key="integration.id" :value="integration.id">
+                        <a-select-option
+                          v-for="integration in filteredIntegrations"
+                          :key="integration.id"
+                          :value="integration.id"
+                        >
                           <div class="w-full flex gap-2 items-center" :data-testid="integration.title">
                             <GeneralIntegrationIcon
                               v-if="integration?.sub_type"
@@ -505,8 +510,8 @@ function handleAutoScroll(scroll: boolean, className: string) {
                       <!-- Schema name -->
                       <a-form-item
                         v-if="
-                          ([ClientType.MSSQL, ClientType.PG].includes(formState.dataSource.client) ||
-                            [ClientType.MSSQL, ClientType.PG].includes(selectedIntegration?.sub_type)) &&
+                          ([ClientType.PG].includes(formState.dataSource.client) ||
+                            [ClientType.PG].includes(selectedIntegration?.sub_type)) &&
                           formState.dataSource.searchPath
                         "
                         :label="$t('labels.schemaName')"
@@ -527,8 +532,8 @@ function handleAutoScroll(scroll: boolean, className: string) {
               <div class="nc-form-section-title">Permissions</div>
               <div class="nc-form-section-body">
                 <DashboardSettingsDataSourcesSourceRestrictions
-                  v-model:allowMetaWrite="allowMetaWrite"
-                  v-model:allowDataWrite="allowDataWrite"
+                  v-model:allow-meta-write="allowMetaWrite"
+                  v-model:allow-data-write="allowDataWrite"
                 />
               </div>
             </div>

@@ -17,7 +17,7 @@ import SqlMgrv2 from '~/db/sql-mgr/v2/SqlMgrv2';
 import { NcError } from '~/helpers/catchError';
 import { Base, Store, User } from '~/models';
 import Noco from '~/Noco';
-import { T } from '~/utils';
+import { isCloud, isOnPrem, T } from '~/utils';
 import NcConnectionMgrv2 from '~/utils/common/NcConnectionMgrv2';
 import getInstance from '~/utils/getInstance';
 import { CacheScope, MetaTable, RootScopes } from '~/utils/globals';
@@ -27,7 +27,7 @@ import {
   defaultGroupByLimitConfig,
   defaultLimitConfig,
 } from '~/helpers/extractLimitAndOffset';
-import { DriverClient } from '~/utils/nc-config';
+import { DriverClient, NC_DISABLE_SUPPORT_CHAT } from '~/utils/nc-config';
 import NocoCache from '~/cache/NocoCache';
 import { getCircularReplacer } from '~/utils';
 
@@ -100,7 +100,10 @@ export class UtilsService {
           return response.data
             .map((x) => x.name)
             .filter(
-              (v) => validate(v) && !v.includes('finn') && !v.includes('beta'),
+              (v) =>
+                validate(v) &&
+                // also filter only XXX.XXX.XXX version. ex: 0.263.8
+                v.match(/^\d+\.\d+\.\d+$/),
             )
             .sort((x, y) => compareVersions(y, x));
         })
@@ -470,7 +473,7 @@ export class UtilsService {
       ee: Noco.isEE(),
       ncAttachmentFieldSize: NC_ATTACHMENT_FIELD_SIZE,
       ncMaxAttachmentsAllowed: NC_MAX_ATTACHMENTS_ALLOWED,
-      isCloud: process.env.NC_CLOUD === 'true',
+      isCloud: isCloud,
       automationLogLevel: process.env.NC_AUTOMATION_LOG_LEVEL || 'OFF',
       baseHostName: process.env.NC_BASE_HOST_NAME,
       disableEmailAuth: this.configService.get('auth.disableEmailAuth', {
@@ -484,6 +487,18 @@ export class UtilsService {
       samlAuthEnabled,
       giftUrl,
       prodReady: Noco.getConfig()?.meta?.db?.client !== DriverClient.SQLITE,
+      allowLocalUrl: process.env.NC_ALLOW_LOCAL_HOOKS === 'true',
+      isOnPrem,
+      disableSupportChat: NC_DISABLE_SUPPORT_CHAT,
+      /**
+       * Allow disabling onboarding flow based on env variable or development mode
+       *
+       * TODO: @rameshmane7218 remove test env once we enable onboarding flow in playwright
+       */
+      disableOnboardingFlow:
+        process.env.NC_DISABLE_ONBOARDING_FLOW === 'true' ||
+        process.env.NODE_ENV === 'development' ||
+        process.env.NODE_ENV === 'test',
     };
 
     return result;
@@ -565,6 +580,50 @@ export class UtilsService {
       Number.isNaN(parseInt(process.env.NC_ATTACHMENT_EXPIRE_SECONDS))
         ? 2 * 60 * 60
         : parseInt(process.env.NC_ATTACHMENT_EXPIRE_SECONDS),
+    );
+
+    return response.data;
+  }
+
+  async cloudFeatures(_req: NcRequest) {
+    const cacheKey = `${CacheScope.CLOUD_FEATURES}`;
+
+    const cachedData = await NocoCache.get(cacheKey, 'json');
+
+    if (cachedData) {
+      try {
+        return JSON.parse(cachedData);
+      } catch (e) {
+        this.logger.error(e?.message, e);
+        await NocoCache.del(cacheKey);
+      }
+    }
+
+    let payload = null;
+    if (
+      !this.lastSyncTime ||
+      dayjs().isAfter(this.lastSyncTime.add(3, 'hours'))
+    ) {
+      payload = await T.payload();
+      this.lastSyncTime = dayjs();
+    }
+
+    let response;
+
+    try {
+      response = await axios.post(
+        'https://product-feed.nocodb.com/api/v1/cloud/features',
+        payload,
+      );
+    } catch (e) {
+      this.logger.error(e?.message, e);
+      return [];
+    }
+
+    await NocoCache.setExpiring(
+      cacheKey,
+      JSON.stringify(response.data, getCircularReplacer),
+      3 * 60 * 60,
     );
 
     return response.data;

@@ -1,6 +1,5 @@
 import { getActivePinia } from 'pinia'
 import type { Actions, AppInfo, Getters, State } from './types'
-import type { NcProjectType } from '#imports'
 
 export function useGlobalActions(state: State, _getters: Getters): Actions {
   const isTokenUpdatedTab = useState('isTokenUpdatedTab', () => false)
@@ -119,7 +118,6 @@ export function useGlobalActions(state: State, _getters: Getters): Actions {
   }: {
     workspaceId?: string
     baseId?: string
-    type?: NcProjectType
     query?: any
   }) => {
     const workspaceId = _workspaceId || 'nc'
@@ -140,20 +138,33 @@ export function useGlobalActions(state: State, _getters: Getters): Actions {
 
   const ncNavigateTo = ({
     workspaceId: _workspaceId,
-    type: _type,
     baseId,
     query,
     tableId,
+    tableTitle,
     viewId,
+    viewTitle,
+    replace = false,
+    newTab = false,
   }: {
     workspaceId?: string
     baseId?: string
-    type?: NcProjectType
     query?: any
     tableId?: string
+    tableTitle?: string
     viewId?: string
+    viewTitle?: string
+    replace?: boolean
+    newTab?: boolean
   }) => {
-    const tablePath = tableId ? `/${tableId}${viewId ? `/${viewId}` : ''}` : ''
+    const tablePath = tableId
+      ? `/${tableId}${
+          viewId
+            ? `/${viewId}${toReadableUrlSlug([tableTitle, viewTitle]) ? `/${toReadableUrlSlug([tableTitle, viewTitle])}` : ''}`
+            : ''
+        }`
+      : ''
+
     const workspaceId = _workspaceId || 'nc'
     let path: string
 
@@ -165,9 +176,14 @@ export function useGlobalActions(state: State, _getters: Getters): Actions {
       path = `/${workspaceId}${queryParams}`
     }
 
-    navigateTo({
-      path,
-    })
+    if (newTab) {
+      window.open(`${window.location.origin}#${path}`, '_blank')
+    } else {
+      return navigateTo({
+        path,
+        replace,
+      })
+    }
   }
 
   const getBaseUrl = (workspaceId: string) => {

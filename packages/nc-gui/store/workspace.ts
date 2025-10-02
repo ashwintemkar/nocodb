@@ -1,22 +1,11 @@
-import type { AuditType, BaseType, PaginatedType } from 'nocodb-sdk'
+import type { BaseType, WorkspaceType } from 'nocodb-sdk'
 import { acceptHMRUpdate, defineStore } from 'pinia'
-import { message } from 'ant-design-vue'
 import { isString } from '@vue/shared'
-import type { AuditLogsQuery } from '~/lib/types'
 
-const defaultAuditLogsQuery = {
-  baseId: undefined,
-  sourceId: undefined,
-  orderBy: {
-    created_at: 'desc',
-    user: undefined,
-  },
-} as Partial<AuditLogsQuery>
+export interface NcWorkspace extends WorkspaceType {}
 
 export const useWorkspace = defineStore('workspaceStore', () => {
   const basesStore = useBases()
-
-  const { isUIAllowed } = useRoles()
 
   const collaborators = ref<any[] | null>()
 
@@ -26,15 +15,13 @@ export const useWorkspace = defineStore('workspaceStore', () => {
 
   const route = router.currentRoute
 
+  const deletingWorkspace = ref(false)
+
   const { $api } = useNuxtApp()
 
   const { refreshCommandPalette } = useCommandPalette()
 
   const lastPopulatedWorkspaceId = ref<string | null>(null)
-
-  const { setTheme, theme } = useTheme()
-
-  const { $e } = useNuxtApp()
 
   const { appInfo, ncNavigateTo } = useGlobal()
 
@@ -48,9 +35,16 @@ export const useWorkspace = defineStore('workspaceStore', () => {
   const isFeedPageOpened = computed(() => route.value.name === 'index-typeOrId-feed')
 
   const isWorkspaceLoading = ref(true)
+  const isWorkspacesLoading = ref(false)
   const isCollaboratorsLoading = ref(true)
   const isInvitingCollaborators = ref(false)
   const workspaceUserCount = ref<number | undefined>(undefined)
+  const workspaceOwnerCount = ref<number | undefined>(undefined)
+
+  const upgradeWsDlg = ref(false)
+  const upgradeWsJobId = ref<string | null>(null)
+
+  const removingCollaboratorMap = ref<Record<string, boolean>>({})
 
   const activePage = computed<'workspace' | 'recent' | 'shared' | 'starred'>(
     () => (route.value.query.page as 'workspace' | 'recent' | 'shared' | 'starred') ?? 'recent',
@@ -183,7 +177,8 @@ export const useWorkspace = defineStore('workspaceStore', () => {
   const moveWorkspace = async (..._args: any) => {}
 
   async function saveTheme(_theme: Partial<ThemeConfig>) {
-    const fullTheme = {
+    // Not Implemented
+    /* const fullTheme = {
       primaryColor: theme.value.primaryColor,
       accentColor: theme.value.accentColor,
       ..._theme,
@@ -198,7 +193,7 @@ export const useWorkspace = defineStore('workspaceStore', () => {
 
     setTheme(fullTheme)
 
-    $e('c:themes:change')
+    $e('c:themes:change') */
   }
 
   async function clearWorkspaces() {
@@ -214,7 +209,7 @@ export const useWorkspace = defineStore('workspaceStore', () => {
       throw new Error('Workspace not selected')
     }
 
-    await ncNavigateTo({
+    ncNavigateTo({
       workspaceId,
     })
   }
@@ -230,62 +225,29 @@ export const useWorkspace = defineStore('workspaceStore', () => {
   }
 
   // Todo: write logic to navigate to integrations
-  const navigateToIntegrations = async (_?: string, cmdOrCtrl?: boolean) => {
+  const navigateToIntegrations = async (_?: string, cmdOrCtrl?: boolean, query: Record<string, string> = {}) => {
     if (cmdOrCtrl) {
-      await navigateTo('/nc/integrations', {
-        open: navigateToBlankTargetOpenOption,
-      })
+      await navigateTo(
+        { path: '/nc/integrations', query },
+        {
+          open: navigateToBlankTargetOpenOption,
+        },
+      )
     } else {
-      await navigateTo('/nc/integrations')
+      await navigateTo({ path: '/nc/integrations', query })
     }
   }
 
-  const navigateToFeed = async (_?: string, cmdOrCtrl?: boolean) => {
+  const navigateToFeed = async (_?: string, cmdOrCtrl?: boolean, query: Record<string, string> = {}) => {
     if (cmdOrCtrl) {
-      await navigateTo('/nc/feed', {
-        open: navigateToBlankTargetOpenOption,
-      })
+      await navigateTo(
+        { path: '/nc/feed', query },
+        {
+          open: navigateToBlankTargetOpenOption,
+        },
+      )
     } else {
-      await navigateTo('/nc/feed')
-    }
-  }
-
-  const auditLogsQuery = ref<Partial<AuditLogsQuery>>(defaultAuditLogsQuery)
-
-  const audits = ref<null | Array<AuditType>>(null)
-
-  const auditPaginationData = ref<PaginatedType>({ page: 1, pageSize: 25, totalRows: 0 })
-
-  const loadAudits = async (
-    _workspaceId?: string,
-    page: number = auditPaginationData.value.page!,
-    limit: number = auditPaginationData.value.pageSize!,
-  ) => {
-    try {
-      if (limit * (page - 1) > auditPaginationData.value.totalRows!) {
-        auditPaginationData.value.page = 1
-        page = 1
-      }
-
-      const { list, pageInfo } = isUIAllowed('workspaceAuditList')
-        ? await $api.utils.projectAuditList({
-            offset: limit * (page - 1),
-            limit,
-            ...auditLogsQuery.value,
-          })
-        : await $api.base.auditList(auditLogsQuery.value.baseId, {
-            offset: limit * (page - 1),
-            limit,
-            ...auditLogsQuery.value,
-          })
-
-      audits.value = list
-      auditPaginationData.value.totalRows = pageInfo.totalRows ?? 0
-    } catch (e) {
-      message.error(await extractSdkResponseErrorMsg(e))
-      audits.value = []
-      auditPaginationData.value.totalRows = 0
-      auditPaginationData.value.page = 1
+      await navigateTo({ path: '/nc/feed', query })
     }
   }
 
@@ -294,7 +256,7 @@ export const useWorkspace = defineStore('workspaceStore', () => {
   }
 
   const getPlanLimit = (_arg: any) => {
-    return 9999
+    return Infinity
   }
 
   return {
@@ -332,17 +294,19 @@ export const useWorkspace = defineStore('workspaceStore', () => {
     lastPopulatedWorkspaceId,
     isWorkspaceSettingsPageOpened,
     workspaceUserCount,
+    workspaceOwnerCount,
     getPlanLimit,
     workspaceRole,
     moveToOrg,
-    auditLogsQuery,
-    audits,
-    auditPaginationData,
     navigateToFeed,
-    loadAudits,
     isIntegrationsPageOpened,
     navigateToIntegrations,
     isFeedPageOpened,
+    deletingWorkspace,
+    isWorkspacesLoading,
+    upgradeWsDlg,
+    upgradeWsJobId,
+    removingCollaboratorMap,
   }
 })
 

@@ -45,8 +45,7 @@ export class ColumnPageObject extends BasePage {
       },
       click: async () => {
         if (await showDefautlValueBtn.isVisible()) {
-          await showDefautlValueBtn.waitFor();
-          await showDefautlValueBtn.click({ force: true });
+          await showDefautlValueBtn.click();
 
           await showDefautlValueBtn.waitFor({ state: 'hidden' });
           await this.get().locator('.nc-default-value-wrapper').waitFor({ state: 'visible' });
@@ -102,6 +101,7 @@ export class ColumnPageObject extends BasePage {
     webhookIndex?: number;
   }) {
     if (insertBeforeColumnTitle) {
+      await this.grid.renderColumn(insertBeforeColumnTitle);
       await this.grid.get().locator(`th[data-title="${insertBeforeColumnTitle}"]`).scrollIntoViewIfNeeded();
       await this.grid.get().locator(`th[data-title="${insertBeforeColumnTitle}"] .nc-ui-dt-dropdown`).click();
       if (isDisplayValue) {
@@ -110,6 +110,7 @@ export class ColumnPageObject extends BasePage {
       }
       await this.rootPage.locator('li[role="menuitem"]:has-text("Insert left"):visible').click();
     } else if (insertAfterColumnTitle) {
+      await this.grid.renderColumn(insertAfterColumnTitle);
       await this.grid.get().locator(`th[data-title="${insertAfterColumnTitle}"]`).scrollIntoViewIfNeeded();
       await this.grid.get().locator(`th[data-title="${insertAfterColumnTitle}"] .nc-ui-dt-dropdown`).click();
       await this.rootPage.locator('li[role="menuitem"]:has-text("Insert right"):visible').click();
@@ -387,13 +388,16 @@ export class ColumnPageObject extends BasePage {
     timeFormat?: string;
     selectType?: boolean;
   }) {
+    await this.grid.renderColumn(title);
     // when clicked on the dropdown cell header
     await this.getColumnHeader(title).locator('.nc-ui-dt-dropdown').scrollIntoViewIfNeeded();
     await this.getColumnHeader(title).locator('.nc-ui-dt-dropdown').click();
-    await expect(await this.rootPage.locator('li[role="menuitem"]:has-text("Edit"):visible').last()).toBeVisible();
-    await this.rootPage.locator('li[role="menuitem"]:has-text("Edit"):visible').last().click();
+    await expect(await this.rootPage.locator('li[role="menuitem"]:has-text("Edit"):visible').first()).toBeVisible();
+    await this.rootPage.locator('li[role="menuitem"]:has-text("Edit"):visible').first().click();
 
     await this.get().waitFor({ state: 'visible' });
+
+    await this.rootPage.waitForTimeout(200);
 
     if (selectType) {
       await this.selectType({ type, first: true });
@@ -422,6 +426,7 @@ export class ColumnPageObject extends BasePage {
       case 'DateTime':
         // Date Format
         await this.get().locator('.nc-date-select').click();
+        await this.get().locator('.nc-date-select').pressSequentially(dateFormat);
         await this.rootPage.locator('.ant-select-item').locator(`text="${dateFormat}"`).click();
 
         // allow UI to update
@@ -459,7 +464,7 @@ export class ColumnPageObject extends BasePage {
     await this.grid.get().locator(`th[data-title="${title}"] .nc-ui-dt-dropdown`).click();
     await this.rootPage.locator('li[role="menuitem"]:has-text("Duplicate"):visible').click();
 
-    await this.rootPage.locator('.nc-modal-column-duplicate .nc-button:has-text("Confirm"):visible').click();
+    await this.rootPage.locator('.nc-modal-column-duplicate .nc-button:has-text("Duplicate Field"):visible').click();
 
     // await this.verifyToast({ message: 'Column duplicated successfully' });
     await this.grid.get().locator(`th[data-title="${expectedTitle}"]`).waitFor({ state: 'visible', timeout: 10000 });
@@ -524,6 +529,7 @@ export class ColumnPageObject extends BasePage {
       return await expect(this.getColumnHeader(title)).not.toBeVisible();
     }
     if (scroll) {
+      await this.grid.renderColumn(title);
       await this.getColumnHeader(title).scrollIntoViewIfNeeded();
     }
     await expect(this.getColumnHeader(title)).toContainText(title);

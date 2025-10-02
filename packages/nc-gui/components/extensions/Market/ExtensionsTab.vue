@@ -8,11 +8,25 @@ const props = withDefaults(defineProps<Props>(), {})
 
 const emits = defineEmits(['update:searchQuery', 'update:isOpen'])
 
+const { $e } = useNuxtApp()
+
 const searchQuery = useVModel(props, 'searchQuery', emits)
 
 const isOpen = useVModel(props, 'isOpen', emits)
 
+watchDebounced(
+  searchQuery,
+  () => {
+    if (searchQuery.value) {
+      $e('c:extensions:marketplace:search')
+    }
+  },
+  { debounce: 3000 },
+)
+
 const { availableExtensions, addExtension, getExtensionAssetsUrl, showExtensionDetails } = useExtensions()
+
+const { blockAddNewExtension } = useEeConfig()
 
 const filteredAvailableExtensions = computed(() =>
   (availableExtensions.value || []).filter(
@@ -23,7 +37,7 @@ const filteredAvailableExtensions = computed(() =>
 )
 
 const onExtensionClick = (extensionId: string) => {
-  showExtensionDetails(extensionId)
+  showExtensionDetails(extensionId, 'market')
   isOpen.value = false
 }
 
@@ -53,6 +67,7 @@ const onAddExtension = (ext: any) => {
         <template v-for="ext of filteredAvailableExtensions" :key="ext.id">
           <div
             class="nc-market-extension-item flex items-center gap-3 border-1 rounded-xl p-3 cursor-pointer hover:bg-gray-50 transition-all"
+            :data-testid="`nc-extension-${ext.id}`"
             @click="onExtensionClick(ext.id)"
           >
             <div class="h-[56px] w-[56px] overflow-hidden m-auto flex-none">
@@ -60,19 +75,33 @@ const onAddExtension = (ext: any) => {
             </div>
             <div class="flex-1 flex flex-grow flex-col gap-2">
               <div>
-                <div class="text-sm font-bold text-nc-content-gray line-clamp-1">
-                  {{ ext.title }}
+                <div class="flex items-center gap-2">
+                  <div class="text-sm font-bold text-nc-content-gray line-clamp-1">
+                    {{ ext.title }}
+                  </div>
+                  <NcBadgeBeta v-if="ext.showAsBeta" />
                 </div>
                 <div v-if="ext.publisher?.name" class="mt-0.5 text-xs leading-[18px] text-nc-content-gray-muted line-clamp-1">
                   Built by {{ ext.publisher.name }}
                 </div>
               </div>
 
-              <div class="max-h-[36px] text-small leading-[18px] text-nc-content-gray-subtle line-clamp-2">
+              <NcTooltip
+                :title="ext.subTitle"
+                show-on-truncate-only
+                :line-clamp="2"
+                class="text-small leading-[18px] text-nc-content-gray-subtle line-clamp-2"
+              >
                 {{ ext.subTitle }}
-              </div>
+              </NcTooltip>
             </div>
-            <NcButton size="small" type="secondary" class="flex-none !px-7px" @click.stop="onAddExtension(ext)">
+            <NcButton
+              v-if="!blockAddNewExtension"
+              size="small"
+              type="secondary"
+              class="flex-none !px-7px"
+              @click.stop="onAddExtension(ext)"
+            >
               <div class="flex items-center gap-1 -ml-3px text-small">
                 <GeneralIcon icon="plus" />
                 {{ $t('general.add') }}
@@ -98,5 +127,3 @@ const onAddExtension = (ext: any) => {
     </div>
   </div>
 </template>
-
-<style lang="scss" scoped></style>

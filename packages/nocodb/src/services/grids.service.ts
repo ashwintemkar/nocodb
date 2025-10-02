@@ -1,13 +1,19 @@
 import { Injectable } from '@nestjs/common';
-import { AppEvents, ViewTypes } from 'nocodb-sdk';
+import { AppEvents, EventType, ViewTypes } from 'nocodb-sdk';
 import type { GridUpdateReqType, ViewCreateReqType } from 'nocodb-sdk';
 import type { NcContext, NcRequest } from '~/interface/config';
+import type { MetaService } from '~/meta/meta.service';
+import {
+  type ViewWebhookManager,
+  ViewWebhookManagerBuilder,
+} from '~/utils/view-webhook-manager';
 import { AppHooksService } from '~/services/app-hooks/app-hooks.service';
 import { validatePayload } from '~/helpers';
 import { NcError } from '~/helpers/catchError';
-import { GridView, Model, View } from '~/models';
+import { GridView, Model, User, View } from '~/models';
 import NocoCache from '~/cache/NocoCache';
 import { CacheScope } from '~/utils/globals';
+import NocoSocket from '~/socket/NocoSocket';
 
 @Injectable()
 export class GridsService {
@@ -20,43 +26,81 @@ export class GridsService {
       grid: ViewCreateReqType;
       req: NcRequest;
       ownedBy?: string;
+      viewWebhookManager?: ViewWebhookManager;
     },
+    ncMeta?: MetaService,
   ) {
     validatePayload(
       'swagger.json#/components/schemas/ViewCreateReq',
       param.grid,
     );
 
-    const model = await Model.get(context, param.tableId);
+    const viewWebhookManager =
+      param.viewWebhookManager ??
+      (
+        await new ViewWebhookManagerBuilder(context, ncMeta).withModelId(
+          param.tableId,
+        )
+      ).forCreate();
+
+    const model = await Model.get(context, param.tableId, ncMeta);
 
     const { id } = await View.insertMetaOnly(
       context,
       {
-        ...param.grid,
-        // todo: sanitize
-        fk_model_id: param.tableId,
-        type: ViewTypes.GRID,
-        base_id: model.base_id,
-        source_id: model.source_id,
-        created_by: param.req.user?.id,
-        owned_by: param.ownedBy || param.req.user?.id,
+        view: {
+          ...param.grid,
+          // todo: sanitize
+          fk_model_id: param.tableId,
+          type: ViewTypes.GRID,
+          base_id: model.base_id,
+          source_id: model.source_id,
+          created_by: param.req.user?.id,
+          owned_by: param.ownedBy || param.req.user?.id,
+        },
+        model,
+        req: param.req,
       },
-      model,
+      ncMeta,
     );
 
     // populate  cache and add to list since the list cache already exist
-    const view = await View.get(context, id);
+    const view = await View.get(context, id, ncMeta);
     await NocoCache.appendToList(
       CacheScope.VIEW,
       [view.fk_model_id],
       `${CacheScope.VIEW}:${id}`,
     );
-    this.appHooksService.emit(AppEvents.VIEW_CREATE, {
-      view,
+    let owner = param.req.user;
 
-      showAs: 'grid',
+    if (param.ownedBy) {
+      owner = await User.get(param.ownedBy);
+    }
+
+    this.appHooksService.emit(AppEvents.GRID_CREATE, {
+      view,
       req: param.req,
+      owner,
+      context,
     });
+
+    await view.getView(context);
+
+    NocoSocket.broadcastEvent(
+      context,
+      {
+        event: EventType.META_EVENT,
+        payload: {
+          action: 'view_create',
+          payload: view,
+        },
+      },
+      context.socket_id,
+    );
+
+    if (!param.viewWebhookManager) {
+      (await viewWebhookManager.withNewViewId(view.id)).emit();
+    }
 
     return view;
   }
@@ -67,27 +111,66 @@ export class GridsService {
       viewId: string;
       grid: GridUpdateReqType;
       req: NcRequest;
+      viewWebhookManager?: ViewWebhookManager;
     },
+    ncMeta?: MetaService,
   ) {
     validatePayload(
       'swagger.json#/components/schemas/GridUpdateReq',
       param.grid,
     );
 
-    const view = await View.get(context, param.viewId);
+    const view = await View.get(context, param.viewId, ncMeta);
 
     if (!view) {
       NcError.viewNotFound(param.viewId);
     }
 
-    const res = await GridView.update(context, param.viewId, param.grid);
+    const oldGridView = await GridView.get(context, param.viewId, ncMeta);
+    const viewWebhookManager =
+      param.viewWebhookManager ??
+      (
+        await (
+          await new ViewWebhookManagerBuilder(context, ncMeta).withModelId(
+            view.fk_model_id,
+          )
+        ).withViewId(param.viewId)
+      ).forUpdate();
 
-    this.appHooksService.emit(AppEvents.VIEW_UPDATE, {
+    await GridView.update(context, param.viewId, param.grid, ncMeta);
+
+    let owner = param.req.user;
+
+    if (view.owned_by && view.owned_by !== param.req.user?.id) {
+      owner = await User.get(view.owned_by, ncMeta);
+    }
+
+    this.appHooksService.emit(AppEvents.GRID_UPDATE, {
       view,
-      showAs: 'map',
+      gridView: param.grid,
+      oldGridView,
       req: param.req,
+      owner,
+      context,
     });
 
-    return res;
+    await view.getView(context);
+
+    NocoSocket.broadcastEvent(
+      context,
+      {
+        event: EventType.META_EVENT,
+        payload: {
+          action: 'view_update',
+          payload: view,
+        },
+      },
+      context.socket_id,
+    );
+
+    if (!param.viewWebhookManager) {
+      (await viewWebhookManager.withNewViewId(view.id)).emit();
+    }
+    return view;
   }
 }

@@ -1,19 +1,19 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { isLinksOrLTAR, isSystemColumn } from 'nocodb-sdk';
-import * as XLSX from 'xlsx';
-import papaparse from 'papaparse';
+import { isLinksOrLTAR, NcSDKErrorV2 } from 'nocodb-sdk';
+import { NcApiVersion } from 'nocodb-sdk';
 import type { BaseModelSqlv2 } from '~/db/BaseModelSqlv2';
 import type { PathParams } from '~/helpers/dataHelpers';
 import type { NcContext } from '~/interface/config';
 import type { Filter } from '~/models';
 import type LinkToAnotherRecordColumn from '../models/LinkToAnotherRecordColumn';
-import { nocoExecute } from '~/utils';
-import { getDbRows, getViewAndModelByAliasOrId } from '~/helpers/dataHelpers';
-import { Base, Column, Model, Source, View } from '~/models';
 import { NcBaseError, NcError } from '~/helpers/catchError';
+import { getViewAndModelByAliasOrId } from '~/helpers/dataHelpers';
 import getAst from '~/helpers/getAst';
 import { PagedResponseImpl } from '~/helpers/PagedResponse';
+import { Base, Column, Model, Source, View } from '~/models';
+import { nocoExecute } from '~/utils';
 import NcConnectionMgrv2 from '~/utils/common/NcConnectionMgrv2';
+import { QUERY_STRING_FIELD_ID_ON_RESULT } from '~/constants';
 
 @Injectable()
 export class DatasService {
@@ -29,6 +29,10 @@ export class DatasService {
       ignorePagination?: boolean;
       limitOverride?: number;
       throwErrorIfInvalidParams?: boolean;
+      getHiddenColumns?: boolean;
+      includeSortAndFilterColumns?: boolean;
+      includeRowColorColumns?: boolean;
+      apiVersion?: NcApiVersion;
     },
   ) {
     let { model, view } = param as { view?: View; model?: Model };
@@ -70,6 +74,10 @@ export class DatasService {
       throwErrorIfInvalidParams: true,
       ignorePagination: param.ignorePagination,
       limitOverride: param.limitOverride,
+      getHiddenColumns: param.getHiddenColumns,
+      apiVersion: param.apiVersion,
+      includeSortAndFilterColumns: param.includeSortAndFilterColumns,
+      includeRowColorColumns: param.includeRowColorColumns,
     });
   }
 
@@ -81,6 +89,18 @@ export class DatasService {
   async dataGroupBy(context: NcContext, param: PathParams & { query: any }) {
     const { model, view } = await getViewAndModelByAliasOrId(context, param);
     return await this.getDataGroupBy(context, {
+      model,
+      view,
+      query: param.query,
+    });
+  }
+
+  async dataGroupByCount(
+    context: NcContext,
+    param: PathParams & { query: any },
+  ) {
+    const { model, view } = await getViewAndModelByAliasOrId(context, param);
+    return await this.getDataGroupByCount(context, {
       model,
       view,
       query: param.query,
@@ -115,6 +135,7 @@ export class DatasService {
       body: unknown;
       cookie: any;
       disableOptimization?: boolean;
+      query: any;
     },
   ) {
     const { model, view } = await getViewAndModelByAliasOrId(context, param);
@@ -128,7 +149,12 @@ export class DatasService {
       source,
     });
 
-    return await baseModel.nestedInsert(param.body, null, param.cookie);
+    return await baseModel.nestedInsert(
+      param.body,
+      param.cookie,
+      null,
+      param?.query,
+    );
   }
 
   async dataUpdate(
@@ -174,7 +200,6 @@ export class DatasService {
 
     // if xcdb base skip checking for LTAR
     if (!source.isMeta()) {
-      // todo: Should have error http status code
       const message = await baseModel.hasLTARData(param.rowId, model);
       if (message.length) {
         NcError.badRequest(message);
@@ -196,6 +221,11 @@ export class DatasService {
       ignorePagination?: boolean;
       limitOverride?: number;
       customConditions?: Filter[];
+      getHiddenColumns?: boolean;
+      apiVersion?: NcApiVersion;
+      includeSortAndFilterColumns?: boolean;
+      includeRowColorColumns?: boolean;
+      skipSortBasedOnOrderCol?: boolean;
     },
   ) {
     const {
@@ -203,6 +233,9 @@ export class DatasService {
       view: view,
       query = {},
       ignoreViewFilterAndSort = false,
+      includeSortAndFilterColumns = false,
+      skipSortBasedOnOrderCol = false,
+      apiVersion,
     } = param;
 
     const source = await Source.get(context, model.source_id);
@@ -221,6 +254,12 @@ export class DatasService {
       query,
       view: view,
       throwErrorIfInvalidParams: param.throwErrorIfInvalidParams,
+      getHiddenColumn: param.getHiddenColumns,
+      apiVersion,
+      includeSortAndFilterColumns: includeSortAndFilterColumns,
+      includeRowColorColumns: param.includeRowColorColumns,
+      skipSubstitutingColumnIds:
+        query?.[QUERY_STRING_FIELD_ID_ON_RESULT] === 'true',
     });
 
     const listArgs: any = dependencyFields;
@@ -240,17 +279,24 @@ export class DatasService {
         try {
           data = await nocoExecute(
             ast,
-            await baseModel.list(listArgs, {
-              ignoreViewFilterAndSort,
-              throwErrorIfInvalidParams: param.throwErrorIfInvalidParams,
-              ignorePagination: param.ignorePagination,
-              limitOverride: param.limitOverride,
-            }),
+            await baseModel.list(
+              { ...listArgs, apiVersion: param.apiVersion },
+              {
+                ignoreViewFilterAndSort,
+                throwErrorIfInvalidParams: param.throwErrorIfInvalidParams,
+                ignorePagination: param.ignorePagination,
+                limitOverride: param.limitOverride,
+                skipSubstitutingColumnIds:
+                  context.api_version === NcApiVersion.V3 &&
+                  query?.[QUERY_STRING_FIELD_ID_ON_RESULT] === 'true',
+                skipSortBasedOnOrderCol,
+              },
+            ),
             {},
             listArgs,
           );
         } catch (e) {
-          if (e instanceof NcBaseError) throw e;
+          if (e instanceof NcBaseError || e instanceof NcSDKErrorV2) throw e;
           this.logger.error(e);
           NcError.internalServerError(
             'Please check server log for more details',
@@ -330,6 +376,33 @@ export class DatasService {
       ...query,
       count,
     });
+  }
+
+  async getDataGroupByCount(
+    context: NcContext,
+    param: { model: Model; view: View; query?: any },
+  ) {
+    const { model, view, query = {} } = param;
+
+    const source = await Source.get(context, model.source_id);
+
+    const baseModel = await Model.getBaseModelSQL(context, {
+      id: model.id,
+      viewId: view?.id,
+      dbDriver: await NcConnectionMgrv2.get(source),
+      source,
+    });
+
+    const listArgs: any = { ...query };
+
+    try {
+      listArgs.filterArr = JSON.parse(listArgs.filterArrJson);
+    } catch (e) {}
+    try {
+      listArgs.sortArr = JSON.parse(listArgs.sortArrJson);
+    } catch (e) {}
+
+    return await baseModel.groupByCount(listArgs);
   }
 
   async dataRead(
@@ -419,6 +492,7 @@ export class DatasService {
       model,
       query,
       view,
+      includeRowColorColumns: query.include_row_color === 'true',
     });
 
     const listArgs: any = { ...dependencyFields };
@@ -461,7 +535,7 @@ export class DatasService {
 
   async dataListByViewId(
     context: NcContext,
-    param: { viewId: string; query: any },
+    param: { viewId: string; query: any; apiVersion?: NcApiVersion },
   ) {
     const view = await View.get(context, param.viewId);
 
@@ -471,7 +545,12 @@ export class DatasService {
 
     if (!model) NcError.tableNotFound(view?.fk_model_id || param.viewId);
 
-    return await this.getDataList(context, { model, view, query: param.query });
+    return await this.getDataList(context, {
+      model,
+      view,
+      query: param.query,
+      apiVersion: param.apiVersion,
+    });
   }
 
   async mmList(
@@ -989,7 +1068,7 @@ export class DatasService {
   ) {
     const base = await Base.getWithInfoByTitleOrId(
       context,
-      req.params.baseName,
+      req.params.baseId ?? req.params.baseName,
     );
 
     const model = await Model.getByAliasOrId(context, {
@@ -1004,106 +1083,6 @@ export class DatasService {
       }));
     if (!model) NcError.tableNotFound(req.params.tableName);
     return { model, view };
-  }
-
-  async extractXlsxData(
-    context: NcContext,
-    param: { view: View; query: any; siteUrl: string },
-  ) {
-    const { view, query, siteUrl } = param;
-    const source = await Source.get(context, view.source_id);
-
-    await view.getModelWithInfo(context);
-    await view.getColumns(context);
-
-    view.model.columns = view.columns
-      .filter((c) => c.show)
-      .map(
-        (c) =>
-          new Column({
-            ...c,
-            ...view.model.columnsById[c.fk_column_id],
-          } as any),
-      )
-      .filter((column) => !isSystemColumn(column) || view.show_system_fields);
-
-    const baseModel = await Model.getBaseModelSQL(context, {
-      id: view.model.id,
-      viewId: view?.id,
-      dbDriver: await NcConnectionMgrv2.get(source),
-      source,
-    });
-
-    const { offset, dbRows, elapsed } = await getDbRows(context, {
-      baseModel,
-      view,
-      query,
-      siteUrl,
-    });
-
-    const fields = query.fields as string[];
-
-    const data = XLSX.utils.json_to_sheet(dbRows, { header: fields });
-
-    return { offset, dbRows, elapsed, data };
-  }
-
-  async extractCsvData(context: NcContext, view: View, req) {
-    const source = await Source.get(context, view.source_id);
-    const fields = req.query.fields;
-
-    await view.getModelWithInfo(context);
-    await view.getColumns(context);
-
-    view.model.columns = view.columns
-      .filter((c) => c.show)
-      .map(
-        (c) =>
-          new Column({
-            ...c,
-            ...view.model.columnsById[c.fk_column_id],
-          } as any),
-      )
-      .filter((column) => !isSystemColumn(column) || view.show_system_fields);
-
-    const baseModel = await Model.getBaseModelSQL(context, {
-      id: view.model.id,
-      viewId: view?.id,
-      dbDriver: await NcConnectionMgrv2.get(source),
-      source,
-    });
-
-    const { offset, dbRows, elapsed } = await getDbRows(context, {
-      baseModel,
-      view,
-      query: req.query,
-      siteUrl: (req as any).ncSiteUrl,
-    });
-
-    const data = papaparse.unparse(
-      {
-        fields: view.model.columns
-          .sort((c1, c2) =>
-            Array.isArray(fields)
-              ? fields.indexOf(c1.title as any) -
-                fields.indexOf(c2.title as any)
-              : 0,
-          )
-          .filter(
-            (c) =>
-              !fields ||
-              !Array.isArray(fields) ||
-              fields.includes(c.title as any),
-          )
-          .map((c) => c.title),
-        data: dbRows,
-      },
-      {
-        escapeFormulae: true,
-      },
-    );
-
-    return { offset, dbRows, elapsed, data };
   }
 
   async getColumnByIdOrName(

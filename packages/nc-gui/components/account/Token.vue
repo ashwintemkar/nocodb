@@ -1,6 +1,5 @@
 <script lang="ts" setup>
 import type { VNodeRef } from '@vue/runtime-core'
-import { message } from 'ant-design-vue'
 import type { ApiTokenType, RequestParams } from 'nocodb-sdk'
 import { extractNextDefaultName } from '~/helpers/parsers/parserHelpers'
 
@@ -46,11 +45,20 @@ const pagination = reactive({
 
 const isLoadingAllTokens = ref(true)
 
+const isModalOpen = ref(false)
+
+const tokenDesc = ref('')
+
+const tokenToCopy = ref('')
+
+const isValidTokenName = ref(false)
+
 const setDefaultTokenName = () => {
   selectedTokenData.value.description = extractNextDefaultName(
     [...allTokens.value.map((el) => el?.description || '')],
     defaultTokenName,
   )
+  isValidTokenName.value = true
 }
 
 const hideOrShowToken = (tokenId: string) => {
@@ -133,11 +141,6 @@ const loadTokens = async (page = currentPage.value, limit = currentLimit.value, 
 
 loadTokens()
 
-const isModalOpen = ref(false)
-const tokenDesc = ref('')
-const tokenToCopy = ref('')
-const isValidTokenName = ref(false)
-
 const deleteToken = async (token: string): Promise<void> => {
   try {
     const id = allTokens.value.find((t) => t.token === token)?.id
@@ -168,9 +171,10 @@ const validateTokenName = (tokenName: string | undefined) => {
 }
 
 const generateToken = async () => {
-  isValidTokenName.value = validateTokenName(selectedTokenData.value.description)
+  const isValid = validateTokenName(selectedTokenData.value.description)
+  isValidTokenName.value = isValid
 
-  if (!isValidTokenName.value) return
+  if (!isValid) return
   try {
     const token = await api.orgTokens.create(selectedTokenData.value)
 
@@ -228,7 +232,7 @@ const handleCancel = () => {
   <div class="flex flex-col">
     <NcPageHeader>
       <template #icon>
-        <MdiShieldKeyOutline class="flex-none text-gray-700 h-5 w-5" />
+        <MdiShieldKeyOutline class="flex-none h-5 w-5" />
       </template>
       <template #title>
         <span data-rec="true">
@@ -240,25 +244,22 @@ const handleCancel = () => {
       <div class="max-w-202 mx-auto h-full w-full" data-testid="nc-token-list">
         <div class="flex gap-4 items-baseline justify-between">
           <h6 class="text-xl text-left font-bold my-0" data-rec="true">{{ $t('title.apiTokens') }}</h6>
-          <NcTooltip v-if="tokens.length" :disabled="!(isEeUI && tokens.length)">
-            <template #title>{{ $t('labels.tokenLimit') }}</template>
-            <NcButton
-              :disabled="showNewTokenModal || (isEeUI && tokens.length)"
-              class="!rounded-md"
-              data-testid="nc-token-create"
-              size="middle"
-              type="primary"
-              tooltip="bottom"
-              @click="showNewTokenModal = true"
-            >
-              <span class="hidden md:block" data-rec="true">
-                {{ $t('title.addNewToken') }}
-              </span>
-              <span class="flex items-center justify-center md:hidden" data-rec="true">
-                <component :is="iconMap.plus" />
-              </span>
-            </NcButton>
-          </NcTooltip>
+          <NcButton
+            :disabled="showNewTokenModal"
+            class="!rounded-md"
+            data-testid="nc-token-create-top"
+            size="middle"
+            type="primary"
+            tooltip="bottom"
+            @click="showNewTokenModal = true"
+          >
+            <span class="hidden md:block" data-rec="true">
+              {{ $t('title.addNewToken') }}
+            </span>
+            <span class="flex items-center justify-center md:hidden" data-rec="true">
+              <component :is="iconMap.plus" />
+            </span>
+          </NcButton>
         </div>
         <span data-rec="true">{{ $t('msg.apiTokenCreate') }}</span>
         <div v-if="!isLoadingAllTokens && (tokens.length || showNewTokenModal)" class="mt-6 h-full max-h-[calc(100%-80px)]">
@@ -294,6 +295,7 @@ const handleCancel = () => {
                       data-testid="nc-token-input"
                       :disabled="isLoading"
                       @press-enter="generateToken"
+                      @input="isValidTokenName = validateTokenName(selectedTokenData.description)"
                     />
                     <span v-if="!isValidTokenName" class="text-red-500 text-xs font-light mt-1.5 ml-1" data-rec="true"
                       >{{ errorMessage }}
@@ -329,9 +331,15 @@ const handleCancel = () => {
                 class="flex pl-5 py-3 justify-between token items-center border-l-1 border-r-1 border-b-1"
               >
                 <span class="text-black font-bold text-3.5 text-start w-2/9">
-                  <GeneralTruncateText placement="top" :length="20">
-                    {{ el.description }}
-                  </GeneralTruncateText>
+                  <div class="flex items-center gap-2">
+                    <GeneralTruncateText placement="top" :length="20">
+                      {{ el.description }}
+                    </GeneralTruncateText>
+                    <NcTooltip v-if="el.fk_sso_client_id" placement="top">
+                      <template #title>{{ $t('msg.ssoTokenTooltip') }}</template>
+                      <NcBadge color="orange" class="!text-xs !py-0.5 !px-1.5 mr-4"> SSO </NcBadge>
+                    </NcTooltip>
+                  </div>
                 </span>
                 <span class="text-gray-500 font-medium text-3.5 text-start w-2/9">
                   <GeneralTruncateText placement="top" :length="20">

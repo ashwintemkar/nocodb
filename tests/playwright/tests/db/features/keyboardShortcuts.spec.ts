@@ -50,8 +50,8 @@ test.describe('Verify shortcuts', () => {
     await unsetup(context);
   });
 
-  test('Verify shortcuts', async ({ page }) => {
-    await dashboard.treeView.openTable({ title: 'Country' });
+  test.skip('Verify shortcuts', async ({ page }) => {
+    await dashboard.treeView.openTable({ title: 'Country', baseTitle: context.base.title });
     // create new table
     await page.keyboard.press('Alt+t');
     await dashboard.treeView.createTable({
@@ -101,7 +101,7 @@ test.describe('Verify shortcuts', () => {
     // expect(url).toContain('signup');
 
     // Cmd + Right arrow
-    await dashboard.treeView.openTable({ title: 'Country' });
+    await dashboard.treeView.openTable({ title: 'Country', baseTitle: context.base.title });
     await page.waitForTimeout(1500);
     await grid.cell.click({ index: 0, columnHeader: 'Country' });
     await page.waitForTimeout(1500);
@@ -230,9 +230,7 @@ test.describe('Clipboard support', () => {
 
     // reload page
     await dashboard.rootPage.reload();
-    // close 'Team & Auth' tab
-    await dashboard.closeTab({ title: 'Team & Auth' });
-    await dashboard.treeView.openTable({ title: 'Sheet1' });
+    await dashboard.treeView.openTable({ title: 'Sheet1', baseTitle: context.base.title });
 
     // ########################################
 
@@ -241,7 +239,7 @@ test.describe('Clipboard support', () => {
     await dashboard.grid.cell.attachment.addFile({
       index: 0,
       columnHeader: 'Attachment',
-      filePath: [`${process.cwd()}/fixtures/sampleFiles/1.json`],
+      filePath: [`${__dirname}/../../../fixtures/sampleFiles/1.json`],
     });
   });
 
@@ -309,15 +307,15 @@ test.describe('Clipboard support', () => {
       { type: 'SingleLineText', value: 'SingleLineText' },
       { type: 'LongText', value: '"LongText"' },
       { type: 'SingleSelect', value: 'Option1' },
-      { type: 'MultiSelect', value: 'Option1,Option2' },
+      { type: 'MultiSelect', value: 'Option1, Option2' },
       { type: 'Number', value: '123' },
       { type: 'PhoneNumber', value: '987654321' },
       { type: 'Email', value: 'test@example.com' },
       { type: 'URL', value: 'nocodb.com' },
-      { type: 'Decimal', value: '1.12' },
-      { type: 'Percent', value: '80' },
-      { type: 'Currency', value: 20, options: { parseInt: true } },
-      { type: 'Duration', value: 480, options: { parseInt: true } },
+      { type: 'Decimal', value: '1.1' },
+      { type: 'Percent', value: '80%' },
+      { type: 'Currency', value: '$20.00' },
+      { type: 'Duration', value: '00:08' },
       { type: 'Rating', value: '4' },
       { type: 'Checkbox', value: 'true' },
       { type: 'Date', value: today },

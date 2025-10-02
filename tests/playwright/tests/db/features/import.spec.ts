@@ -51,11 +51,11 @@ test.describe('Import', () => {
 
     await dashboard.treeView.quickImport({ title: 'Microsoft Excel', baseTitle: context.base.title, context });
     await dashboard.importTemplate.import({
-      file: `${process.cwd()}/fixtures/sampleFiles/simple.xlsx`,
+      file: `${__dirname}/../../../fixtures/sampleFiles/simple.xlsx`,
       result: expected,
     });
 
-    await dashboard.treeView.openTable({ title: 'Sheet2' });
+    await dashboard.treeView.openTable({ title: 'Sheet2', baseTitle: context.base.title });
 
     const recordCells = { number: '1', float: '1.1', text: 'abc' };
 

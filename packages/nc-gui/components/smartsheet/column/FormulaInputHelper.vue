@@ -1,35 +1,50 @@
 <script setup lang="ts">
-import { UITypes, isHiddenCol, jsepCurlyHook } from 'nocodb-sdk'
+import { type ColumnType, UITypes, isHiddenCol, jsepCurlyHook } from 'nocodb-sdk'
 import type { Ref } from 'vue'
 import type { ListItem as AntListItem } from 'ant-design-vue/lib/list'
-import { KeyCode, type editor as MonacoEditor, Position, Range, languages, editor as monacoEditor } from 'monaco-editor'
+import {
+  KeyCode,
+  MarkerSeverity,
+  type editor as MonacoEditor,
+  Position,
+  Range,
+  languages,
+  editor as monacoEditor,
+} from 'monaco-editor'
 import jsep from 'jsep'
 import formulaLanguage from '../../monaco/formula'
 import { isCursorInsideString } from '../../../utils/formulaUtils'
 
 interface Props {
   error?: boolean
+  editorError?: { isError: boolean; message: string; position: { column: number; row: number; length: number } }
   value: string
   label?: string
   editorHeight?: string
   suggestionHeight?: 'small' | 'medium' | 'large'
   disableSuggestionHeaders?: boolean
+  disabledFormulas: string[]
 }
 
 const props = withDefaults(defineProps<Props>(), {
   suggestionHeight: 'large',
   disableSuggestionHeaders: false,
+  disabledFormulas: () => [],
 })
 
 const emits = defineEmits(['update:value'])
 
-const { error, suggestionHeight, editorHeight } = toRefs(props)
+const { suggestionHeight, editorHeight } = toRefs(props)
 
 const value = useVModel(props, 'value', emits)
+
+const { $e } = useNuxtApp()
 
 const uiTypesNotSupportedInFormulas = [UITypes.QrCode, UITypes.Barcode, UITypes.Button]
 
 const { sqlUi, column, fromTableExplorer, validateInfos } = useColumnCreateStoreOrThrow()
+
+const { isAiModeFieldModal } = usePredictFields()
 
 const meta = inject(MetaInj, ref())
 
@@ -59,8 +74,6 @@ const availableFunctions = formulaList
 
 const availableBinOps = ['+', '-', '*', '/', '>', '<', '==', '<=', '>=', '!=', '&']
 
-const autocomplete = ref(false)
-
 const variableListRef = ref<(typeof AntListItem)[]>([])
 
 const sugOptionsRef = ref<(typeof AntListItem)[]>([])
@@ -75,8 +88,13 @@ const sortOrder: Record<string, number> = {
   op: 2,
 }
 
+const getIcon = (c: ColumnType) =>
+  h(resolveComponent('SmartsheetHeaderIcon'), {
+    column: c,
+  })
+
 const suggestionsList = computed(() => {
-  const unsupportedFnList = sqlUi.value.getUnsupportedFnList()
+  const unsupportedFnList = sqlUi.value?.getUnsupportedFnList() || []
   return (
     [
       ...availableFunctions.map((fn: string) => ({
@@ -99,7 +117,7 @@ const suggestionsList = computed(() => {
         .map((c: any) => ({
           text: c.title,
           type: 'column',
-          icon: getUIDTIcon(c.uidt) ? markRaw(getUIDTIcon(c.uidt)!) : undefined,
+          icon: markRaw(getIcon(c)),
           uidt: c.uidt,
         })),
       ...availableBinOps.map((op: string) => ({
@@ -117,6 +135,7 @@ const suggestionsList = computed(() => {
         }
         return 0
       })
+      .filter((s) => !props.disabledFormulas.includes(s.text))
   )
 })
 
@@ -141,6 +160,7 @@ const variableList = computed(() => {
 
 const monacoRoot = ref<HTMLDivElement>()
 let editor: MonacoEditor.IStandaloneCodeEditor
+let model: MonacoEditor.ITextModel
 
 function getCurrentKeyword() {
   const model = editor.getModel()
@@ -160,7 +180,7 @@ const handleInputDeb = useDebounceFn(function () {
 
 onMounted(async () => {
   if (monacoRoot.value) {
-    const model = monacoEditor.createModel(value.value, 'formula')
+    model = monacoEditor.createModel(value.value, 'formula')
 
     languages.register({
       id: formulaLanguage.name,
@@ -223,6 +243,8 @@ onMounted(async () => {
       'minimap': {
         enabled: false,
       },
+      // Don't suggest words from the document, shown when typing COUNT(C
+      'wordBasedSuggestions': 'off',
     })
 
     editor.layout({
@@ -246,7 +268,6 @@ onMounted(async () => {
 
       // IF cursor is inside string, don't show any suggestions
       if (isCursorInsideString(text, offset)) {
-        autocomplete.value = false
         suggestion.value = []
       } else {
         handleInput()
@@ -254,84 +275,89 @@ onMounted(async () => {
 
       const findEnclosingFunction = (text: string, offset: number) => {
         const formulaRegex = /\b(?<!['"])(\w+)\s*\(/g // Regular expression to match function names
-        const quoteRegex = /"/g // Regular expression to match quotes
 
         const functionStack = [] // Stack to keep track of functions
         let inQuote = false
+        let quoteChar = ''
+
+        // First scan the text to determine the quote state at each position
+        const quoteState = new Array(text.length).fill(false)
+        for (let i = 0; i < text.length; i++) {
+          if ((text[i] === '"' || text[i] === "'") && (i === 0 || text[i - 1] !== '\\')) {
+            if (!inQuote) {
+              inQuote = true
+              if (text[i]) {
+                quoteChar = text[i]
+              }
+            } else if (text[i] === quoteChar) {
+              inQuote = false
+            }
+          }
+          quoteState[i] = inQuote
+        }
 
         let match
         // eslint-disable-next-line no-cond-assign
         while ((match = formulaRegex.exec(text)) !== null) {
+          // Check if we're in quotes at this position
+          if (quoteState[match.index]) continue
+
           if (match.index > offset) break
 
-          if (!inQuote) {
-            const functionData = {
-              name: match[1],
-              start: match.index,
-              end: formulaRegex.lastIndex,
-            }
-
-            let parenBalance = 1
-            let childValueStart = -1
-            let childValueEnd = -1
-            for (let i = formulaRegex.lastIndex; i < text.length; i++) {
-              if (text[i] === '(') {
-                parenBalance++
-              } else if (text[i] === ')') {
-                parenBalance--
-                if (parenBalance === 0) {
-                  functionData.end = i + 1
-                  break
-                }
-              }
-
-              // Child value handling
-              if (childValueStart === -1 && ['(', ',', '{'].includes(text[i])) {
-                childValueStart = i
-              } else if (childValueStart !== -1 && ['(', ',', '{'].includes(text[i])) {
-                childValueStart = i
-              } else if (childValueStart !== -1 && ['}', ',', ')'].includes(text[i])) {
-                childValueEnd = i
-                childValueStart = -1
-              }
-
-              if (i >= offset) {
-                // If we've reached the offset and parentheses are still open, consider the current position as the end of the function
-                if (parenBalance > 0) {
-                  functionData.end = i + 1
-                  break
-                }
-
-                // Check for nested functions
-                const nestedFunction = findEnclosingFunction(
-                  text.substring(functionData.start + match[1].length + 1, i),
-                  offset - functionData.start - match[1].length - 1,
-                )
-                if (nestedFunction) {
-                  return nestedFunction
-                } else {
-                  functionStack.push(functionData)
-                  break
-                }
-              }
-            }
-
-            // If child value ended before offset, use child value end as function end
-            if (childValueEnd !== -1 && childValueEnd < offset) {
-              functionData.end = childValueEnd + 1
-            }
-
-            functionStack.push(functionData)
+          const functionData = {
+            name: match[1],
+            start: match.index,
+            end: formulaRegex.lastIndex,
           }
 
-          // Check for quotes
-          let quoteMatch
-          // eslint-disable-next-line no-cond-assign
-          while ((quoteMatch = quoteRegex.exec(text)) !== null && quoteMatch.index < match.index) {
-            inQuote = !inQuote
+          let parenBalance = 1
+          let childValueStart = -1
+
+          // Process the rest of the text to find the matching closing parenthesis
+          for (let i = formulaRegex.lastIndex; i < text.length; i++) {
+            // Check if we're in quotes at this position
+            if (quoteState[i]) continue
+
+            if (text[i] === '(') {
+              parenBalance++
+            } else if (text[i] === ')') {
+              parenBalance--
+              if (parenBalance === 0) {
+                functionData.end = i + 1
+                break
+              }
+            }
+
+            // Child value handling
+            if (childValueStart === -1 && ['('].includes(text[i])) {
+              childValueStart = i
+            } else if (childValueStart !== -1 && ['('].includes(text[i])) {
+              childValueStart = i
+            } else if (childValueStart !== -1 && [')'].includes(text[i])) {
+              childValueStart = -1
+            }
+
+            // If we've reached the end of text without finding a closing parenthesis
+            if (i === text.length - 1 && parenBalance > 0) {
+              // Consider this position as the end of the function
+              functionData.end = i + 1
+            }
+          }
+
+          // Handle the case where we reach the offset but parentheses are still unbalanced
+          if (parenBalance > 0 && offset >= formulaRegex.lastIndex) {
+            // Set the end to the last character if we didn't find a proper end
+            functionData.end = Math.max(functionData.end, text.length)
+            functionStack.push(functionData)
+          } else {
+            // Add the function to our stack if it contains the cursor position
+            if (functionData.start <= offset && functionData.end >= offset) {
+              functionStack.push(functionData)
+            }
           }
         }
 
+        // Make sure to handle the case where offset is in a quote but a function still encloses it
         const enclosingFunctions = functionStack.filter((func) => func.start <= offset && func.end >= offset)
         return enclosingFunctions.length > 0 ? enclosingFunctions[enclosingFunctions.length - 1].name : null
       }
@@ -409,7 +435,6 @@ function appendText(item: Record<string, any>) {
   } else {
     insertStringAtPosition(editor, text, true)
   }
-  autocomplete.value = false
   wordToComplete.value = ''
 
   if (item.type === 'function' || item.type === 'op') {
@@ -441,6 +466,10 @@ function isCursorBetweenParenthesis() {
   return openParenthesis > closeParenthesis
 }
 
+const isItemSelected = (item: Record<string, any>) => {
+  return suggestionPreviewed.value?.text === item.text
+}
+
 function handleInput() {
   if (!editor) return
 
@@ -452,14 +481,21 @@ function handleInput() {
   const text = model.getValue()
   const offset = model.getOffsetAt(position)
 
+  if (text.length === 0) {
+    // clear error if formula is empty
+    if (validateInfos.formula_raw?.validateStatus === 'error') {
+      validateInfos.formula_raw.validateStatus = 'success'
+      validateInfos.formula_raw.help = []
+    }
+  }
+
   // IF cursor is inside string, don't show any suggestions
   if (isCursorInsideString(text, offset)) {
-    autocomplete.value = false
     suggestion.value = []
     return
   }
 
-  if (!isCursorBetweenParenthesis()) priority.value = 1
+  priority.value = isCursorBetweenParenthesis() ? -1 : 1
 
   selected.value = 0
   suggestion.value = []
@@ -482,17 +518,17 @@ function handleInput() {
   } else if (!showFunctionList.value) {
     showFunctionList.value = true
   }
-
-  autocomplete.value = !!suggestion.value.length
 }
 
 function selectText() {
-  if (suggestion.value && selected.value > -1 && selected.value < suggestionsList.value.length) {
+  if (suggestion.value && selected.value > -1 && selected.value < suggestion.value.length) {
     if (selected.value < suggestedFormulas.value.length) {
       if (suggestedFormulas.value[selected.value].unsupported) return
       appendText(suggestedFormulas.value[selected.value])
     } else {
-      appendText(variableList.value[selected.value + suggestedFormulas.value.length])
+      // Calculate the index in variableList by subtracting the length of suggestedFormulas
+      const variableIndex = selected.value - suggestedFormulas.value.length
+      appendText(variableList.value[variableIndex])
     }
   }
 
@@ -502,7 +538,15 @@ function selectText() {
 function suggestionListUp() {
   if (suggestion.value) {
     selected.value = --selected.value > -1 ? selected.value : suggestion.value.length - 1
-    suggestionPreviewed.value = suggestedFormulas.value[selected.value]
+
+    // Update suggestionPreviewed for both formula and field items
+    if (selected.value < suggestedFormulas.value.length) {
+      suggestionPreviewed.value = suggestedFormulas.value[selected.value]
+    } else {
+      const variableIndex = selected.value - suggestedFormulas.value.length
+      suggestionPreviewed.value = variableList.value[variableIndex]
+    }
+
     scrollToSelectedOption()
   }
 }
@@ -510,7 +554,14 @@ function suggestionListUp() {
 function suggestionListDown() {
   if (suggestion.value) {
     selected.value = ++selected.value % suggestion.value.length
-    suggestionPreviewed.value = suggestedFormulas.value[selected.value]
+
+    // Update suggestionPreviewed for both formula and field items
+    if (selected.value < suggestedFormulas.value.length) {
+      suggestionPreviewed.value = suggestedFormulas.value[selected.value]
+    } else {
+      const variableIndex = selected.value - suggestedFormulas.value.length
+      suggestionPreviewed.value = variableList.value[variableIndex]
+    }
 
     scrollToSelectedOption()
   }
@@ -521,8 +572,7 @@ function scrollToSelectedOption() {
     if (sugOptionsRef.value[selected.value]) {
       try {
         sugOptionsRef.value[selected.value].$el.scrollIntoView({
-          block: 'nearest',
-          inline: 'start',
+          block: 'center',
         })
       } catch (e) {}
     }
@@ -575,12 +625,90 @@ const handleKeydown = (e: KeyboardEvent) => {
     }
   }
 }
+
+const { isAiFeaturesEnabled, aiIntegrationAvailable, aiLoading, predictFormula, repairFormula } = useNocoAi()
+
+enum AI_MODE {
+  NONE = 'none',
+  PROMPT = 'prompt',
+}
+
+const aiMode = ref<AI_MODE>(AI_MODE.NONE)
+
+const aiPrompt = ref('')
+
+const oldAiPrompt = ref('')
+
+const calledFun = ref<null | string>(null)
+
+const promptAI = async () => {
+  if (!aiPrompt.value?.trim()) return
+
+  calledFun.value = 'promptAI'
+
+  $e(`a:column:ai:formula:predict-from-prompt`, {
+    prompt: aiPrompt.value,
+  })
+
+  const formula = await predictFormula(aiPrompt.value, value.value)
+
+  if (formula) {
+    editor.setValue(formula)
+    oldAiPrompt.value = aiPrompt.value
+  }
+}
+
+const repairFormulaAI = async () => {
+  calledFun.value = 'repairFormulaAI'
+
+  $e(`a:column:ai:formula:repair`)
+
+  const formula = await repairFormula(value.value, validateInfos?.formula_raw?.help.join(' | '))
+
+  if (formula) {
+    editor.setValue(formula)
+  }
+}
+
+const enableAI = async () => {
+  $e(`c:column:ai:formula:enable`)
+
+  if (validateInfos?.formula_raw?.validateStatus === 'error') {
+    await repairFormulaAI()
+  } else {
+    aiMode.value = AI_MODE.PROMPT
+  }
+}
+
+// set monaco module markers every editor error change
+watch(
+  () => props.editorError,
+  (value) => {
+    if (value?.isError) {
+      monacoEditor.setModelMarkers(editor.getModel()!, 'owner', [
+        {
+          startLineNumber: value.position.row + 1,
+          startColumn: value.position.column + 1,
+          endLineNumber: value.position.row + 1,
+          endColumn: value.position.column + 1 + value.position.length,
+          message: value.message,
+          severity: MarkerSeverity.Error,
+        },
+      ])
+    } else {
+      monacoEditor.setModelMarkers(editor.getModel()!, 'owner', [])
+    }
+  },
+)
+const validationErrorDisplay = computed(() => {
+  return props.editorError?.isError ? { validateStatus: 'success' } : validateInfos.formula_raw
+})
 </script>
 
 <template>
   <div
     v-if="suggestionPreviewed && !suggestionPreviewed.unsupported && suggestionPreviewed.type === 'function'"
-    class="w-84 fixed bg-white z-10 pl-3 pt-3 border-1 shadow-md rounded-xl"
+    class="w-84 fixed bg-white z-11 pl-3 pt-3 border-1 shadow-md rounded-xl"
     :style="{
       left: suggestionPreviewPostion.left,
       top: suggestionPreviewPostion.top,
@@ -626,26 +754,111 @@ const handleKeydown = (e: KeyboardEvent) => {
       </a>
     </div>
   </div>
-
-  <a-form-item :label="label" required v-bind="validateInfos.formula_raw">
+  <a-form-item :label="label" required v-bind="validationErrorDisplay">
     <div
       ref="monacoRoot"
       :style="{
         height: editorHeight ?? '100px',
       }"
       :class="{
-        '!border-red-500 formula-error': error,
-        '!focus-within:border-brand-500 formula-success': !error,
+        '!border-red-500 formula-error':
+          !validationErrorDisplay?.validateStatus || validationErrorDisplay?.validateStatus !== 'success',
+        '!focus-within:border-brand-500 shadow-default hover:shadow-hover formula-success':
+          !validationErrorDisplay?.validateStatus || validationErrorDisplay?.validateStatus === 'success',
+        'bg-white': isAiModeFieldModal,
       }"
-      class="formula-monaco"
+      class="formula-monaco transition-colors duration-300"
       @keydown.stop="handleKeydown"
     ></div>
   </a-form-item>
+  <template v-if="isAiFeaturesEnabled">
+    <div v-if="aiMode === AI_MODE.NONE" class="w-full flex justify-end mt-2">
+      <NcButton size="small" type="text" :loading="aiLoading" @click="enableAI">
+        <template #icon>
+          <GeneralIcon icon="ncAutoAwesome" class="text-nc-content-purple-medium h-4 w-4" />
+        </template>
+        <template #loadingIcon>
+          <GeneralLoader class="!text-nc-content-purple-medium" size="regular" />
+        </template>
+        <div class="flex gap-2 items-center">
+          <span v-if="validateInfos?.formula_raw?.validateStatus === 'error'" class="text-[13px] font-semibold">Fix Formula</span>
+          <span v-else class="text-[13px] font-semibold">Formula Helper</span>
+        </div>
+      </NcButton>
+    </div>
+    <template v-else-if="aiMode === AI_MODE.PROMPT">
+      <AiIntegrationNotFound v-if="!aiIntegrationAvailable" class="mt-4" />
+      <div v-else class="prompt-wrapper">
+        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="9" viewBox="0 0 18 9" fill="none" class="nc-polygon-2">
+          <path d="M1.51476 8.5L9 0.721111L16.4852 8.5H1.51476Z" fill="white" stroke="#e5d4f5" />
+        </svg>
+        <div class="prompt-input-wrapper w-full flex">
+          <div class="nc-triangle-bottom-bar"></div>
+
+          <div class="flex items-center gap-2 pl-3 pr-1 py-1 border-b-1 border-transparent">
+            <div class="flex-1 text-small leading-[18px] font-bold text-nc-content-gray-subtle2">Prompt</div>
+            <div class="flex items-center gap-2">
+              <NcButton
+                v-if="validateInfos?.formula_raw?.validateStatus === 'error'"
+                type="secondary"
+                size="xs"
+                theme="ai"
+                :bordered="false"
+                class="nc-formula-helper-ai-btn !px-2"
+                :disabled="aiLoading && calledFun === 'repairFormulaAI'"
+                :loading="aiLoading && calledFun === 'repairFormulaAI'"
+                @click="repairFormulaAI"
+              >
+                <template #icon>
+                  <GeneralIcon icon="ncAutoAwesome" class="!text-current h-4 w-4" />
+                </template>
+                <template #loadingIcon>
+                  <GeneralLoader class="!text-current" size="regular" />
+                </template>
+                <div class="flex items-center gap-1">
+                  <span class="text-[13px] font-semibold text-purple-400">Repair</span>
+                </div>
+              </NcButton>
+              <NcButton
+                type="secondary"
+                size="xs"
+                theme="ai"
+                :bordered="false"
+                class="nc-formula-helper-ai-btn !px-2"
+                :loading="aiLoading && calledFun === 'promptAI'"
+                :disabled="
+                  !aiPrompt?.trim() ||
+                  (!!aiPrompt.trim() && aiPrompt.trim() === oldAiPrompt.trim()) ||
+                  (aiLoading && calledFun === 'promptAI')
+                "
+                @click="promptAI"
+              >
+                <template #icon>
+                  <GeneralIcon icon="ncAutoAwesome" class="!text-current h-4 w-4" />
+                </template>
+                <template #loadingIcon>
+                  <GeneralLoader class="!text-current" size="regular" />
+                </template>
+                <div class="flex items-center gap-1">Generate</div>
+              </NcButton>
+            </div>
+          </div>
+          <a-textarea
+            v-model:value="aiPrompt"
+            class="nc-ai-formula-helper-input nc-input-shadow nc-ai-input nc-scrollbar-thin !min-h-[80px]"
+            :placeholder="`Enter prompt to ${value ? 'modify' : 'generate'} formula`"
+          ></a-textarea>
+        </div>
+      </div>
+    </template>
+  </template>
+
   <div
     :class="{
       'h-[250px]': suggestionHeight === 'large',
       'h-[150px]': suggestionHeight === 'medium',
       'h-[125px]': suggestionHeight === 'small',
+      'bg-white': isAiModeFieldModal,
     }"
     class="overflow-auto flex flex-col nc-suggestion-list nc-scrollbar-thin border-1 border-gray-200 rounded-lg mt-4"
   >
@@ -667,7 +880,7 @@ const handleKeydown = (e: KeyboardEvent) => {
             "
             class="cursor-pointer !overflow-hidden hover:bg-gray-50"
             :class="{
-              '!bg-gray-100': selected === index,
+              '!bg-gray-100': isItemSelected(item),
               'cursor-not-allowed': item.unsupported,
             }"
             @click.prevent.stop="!item.unsupported && appendText(item)"
@@ -676,11 +889,16 @@ const handleKeydown = (e: KeyboardEvent) => {
             <a-list-item-meta>
               <template #title>
                 <div class="flex items-center gap-x-1" :class="{ 'text-gray-400': item.unsupported }">
-                  <component :is="iconMap.function" v-if="item.type === 'function'" class="w-4 h-4 !text-gray-600" />
+                  <component
+                    :is="iconMap.function"
+                    v-if="item.type === 'function'"
+                    class="w-4 h-4 !text-nc-content-gray-subtle2"
+                  />
 
-                  <component :is="iconMap.calculator" v-if="item.type === 'op'" class="w-4 h-4 !text-gray-600" />
+                  <component :is="iconMap.calculator" v-if="item.type === 'op'" class="w-4 h-4 !text-nc-content-gray-subtle2" />
 
-                  <component :is="item.icon" v-if="item.type === 'column'" class="w-4 h-4 !text-gray-600" />
+                  <component :is="item.icon" v-if="item.type === 'column'" class="w-4 h-4" color="text-nc-content-gray-subtle2" />
+
                   <span class="text-small leading-[18px]" :class="{ 'text-gray-800': !item.unsupported }">{{ item.text }}</span>
                 </div>
                 <div v-if="item.unsupported" class="ml-5 text-gray-400 text-xs">{{ $t('msg.formulaNotSupported') }}</div>
@@ -713,7 +931,7 @@ const handleKeydown = (e: KeyboardEvent) => {
               }
             "
             :class="{
-              '!bg-gray-100': selected === index + suggestedFormulas.length,
+              '!bg-gray-100': isItemSelected(item),
             }"
             class="cursor-pointer hover:bg-gray-50"
             @click.prevent.stop="appendText(item)"
@@ -722,7 +940,7 @@ const handleKeydown = (e: KeyboardEvent) => {
               <template #title>
                 <div class="flex items-center gap-x-1 justify-between">
                   <div class="flex items-center gap-x-1 rounded-md px-1 h-5">
-                    <component :is="item.icon" class="w-4 h-4 !text-gray-600" />
+                    <component :is="item.icon" class="w-4 h-4" color="text-nc-content-gray-subtle2" />
 
                     <span class="text-small leading-[18px] text-gray-800 font-weight-500">{{ item.text }}</span>
                   </div>
@@ -782,11 +1000,37 @@ const handleKeydown = (e: KeyboardEvent) => {
     width: auto !important;
   }
 }
+.prompt-wrapper {
+  @apply relative mt-2.5;
+
+  .nc-polygon-2 {
+    @apply absolute -top-[8px] left-[50%] transform -translate-x-1/2 z-0;
+  }
+
+  .nc-triangle-bottom-bar {
+    @apply absolute -top-[8px] left-[50%] transform -translate-x-1/2 w-3.5 h-2 bg-transparent border-2 border-transparent !border-b-nc-bg-gray-extralight;
+  }
+
+  .prompt-input-wrapper {
+    @apply relative inline-block transition-all duration-300 shadow-default border-1 rounded-lg bg-nc-bg-gray-extralight border-purple-100 z-10;
+
+    .nc-ai-formula-helper-input {
+      @apply rounded-b-lg !border-purple-100 !-m-[1px] !max-w-[calc(100%_+_2px)] !w-[calc(100%_+_2px)] !shadow-none;
+
+      &:focus {
+        @apply rounded-lg !border-nc-border-purple !shadow-selected-ai;
+      }
+    }
+  }
+}
 </style>
 
 <style lang="scss">
 .formula-placeholder {
   @apply !text-gray-500 !text-xs !font-medium;
-  font-family: 'Manrope';
+  font-family: 'Inter';
+}
+.monaco-hover {
+  position: fixed;
 }
 </style>

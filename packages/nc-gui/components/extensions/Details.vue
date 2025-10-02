@@ -1,5 +1,6 @@
 <script lang="ts" setup>
 import { marked } from 'marked'
+import { PlanFeatureTypes } from 'nocodb-sdk'
 
 interface Prop {
   modelValue: boolean
@@ -14,6 +15,8 @@ const emit = defineEmits(['update:modelValue'])
 const vModel = useVModel(props, 'modelValue', emit)
 
 const { availableExtensions, descriptionContent, addExtension, getExtensionAssetsUrl, isMarketVisible } = useExtensions()
+
+const { blockAddNewExtension, navigateToPricing, isWsOwner } = useEeConfig()
 
 const onBack = () => {
   vModel.value = false
@@ -63,13 +66,7 @@ const detailsBody = computed(() => {
 </script>
 
 <template>
-  <NcModal
-    v-model:visible="vModel"
-    :class="{ active: vModel }"
-    :footer="null"
-    size="lg"
-    wrap-class-name="nc-modal-extension-details"
-  >
+  <NcModal v-model:visible="vModel" :footer="null" size="lg" wrap-class-name="nc-modal-extension-details">
     <div v-if="activeExtension" class="flex flex-col w-full h-full">
       <div class="flex items-center gap-3 px-4 py-3 border-b-1 border-gray-200">
         <NcButton v-if="from === 'market'" size="small" type="text" @click="onBack">
@@ -78,15 +75,34 @@ const detailsBody = computed(() => {
 
         <img :src="getExtensionAssetsUrl(activeExtension.iconUrl)" alt="icon" class="h-[50px] w-[50px] object-contain" />
         <div class="flex-1 flex flex-col">
-          <div class="font-semibold text-xl truncate">{{ activeExtension.title }}</div>
+          <div class="flex items-center gap-2">
+            <div class="font-semibold text-xl truncate">{{ activeExtension.title }}</div>
+            <NcBadgeBeta v-if="activeExtension.showAsBeta" />
+          </div>
           <div class="text-small leading-[18px] text-gray-500 truncate">{{ activeExtension.subTitle }}</div>
         </div>
         <div class="self-start flex items-center gap-2.5">
-          <NcButton size="small" class="w-full" @click="onAddExtension(activeExtension)">
+          <NcButton v-if="!blockAddNewExtension" size="small" class="w-full" @click="onAddExtension(activeExtension)">
             <div class="flex items-center justify-center gap-1 -ml-3px">
               <GeneralIcon icon="plus" /> {{ $t('general.add') }} {{ $t('general.extension') }}
             </div>
           </NcButton>
+          <NcTooltip v-else>
+            <template #title>
+              {{ $t('upgrade.upgradeToAddMoreExtensions') }}
+            </template>
+            <NcButton
+              size="small"
+              class="w-full nc-upgrade-plan-btn"
+              @click="navigateToPricing({ limitOrFeature: PlanFeatureTypes.FEATURE_EXTENSIONS })"
+            >
+              <div class="flex items-center justify-center gap-2">
+                <GeneralIcon icon="ncArrowUpCircle" class="h-4 w-4" />
+
+                {{ isWsOwner ? $t('upgrade.upgradeToAdd') : $t('upgrade.requestUpgradeToAdd') }}
+              </div>
+            </NcButton>
+          </NcTooltip>
           <NcButton size="small" type="text" @click="vModel = false">
             <GeneralIcon icon="close" class="text-gray-600" />
           </NcButton>

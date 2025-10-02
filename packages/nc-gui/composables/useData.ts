@@ -1,5 +1,5 @@
 import type { ColumnType, LinkToAnotherRecordType, PaginatedType, RelationTypes, TableType, ViewType } from 'nocodb-sdk'
-import { UITypes, isCreatedOrLastModifiedByCol, isCreatedOrLastModifiedTimeCol } from 'nocodb-sdk'
+import { UITypes, isAIPromptCol, isCreatedOrLastModifiedByCol, isCreatedOrLastModifiedTimeCol } from 'nocodb-sdk'
 import type { ComputedRef, Ref } from 'vue'
 import type { CellRange } from '#imports'
 
@@ -72,7 +72,7 @@ export function useData(args: {
 
       const insertedData = await $api.dbViewRow.create(
         NOCO,
-        base?.value.id as string,
+        metaValue?.base_id ?? (base?.value.id as string),
         metaValue?.id as string,
         viewMetaValue?.id as string,
         { ...insertObj, ...(ltarState || {}) },
@@ -205,7 +205,7 @@ export function useData(args: {
 
       const updatedRowData: Record<string, any> = await $api.dbViewRow.update(
         NOCO,
-        base?.value.id as string,
+        metaValue?.base_id ?? (base?.value.id as string),
         metaValue?.id as string,
         viewMetaValue?.id as string,
         encodeURIComponent(id),
@@ -286,6 +286,7 @@ export function useData(args: {
                 col.uidt === UITypes.Lookup ||
                 col.uidt === UITypes.Button ||
                 col.uidt === UITypes.Attachment ||
+                isAIPromptCol(col) ||
                 col.au ||
                 (isValidValue(col?.cdf) && / on update /i.test(col.cdf)))
             )
@@ -471,7 +472,7 @@ export function useData(args: {
     try {
       await $api.dbTableRow.nestedAdd(
         NOCO,
-        base.value.id as string,
+        metaValue?.base_id ?? (base.value.id as string),
         metaValue?.id as string,
         encodeURIComponent(rowId),
         type as RelationTypes,
@@ -527,7 +528,7 @@ export function useData(args: {
 
     const res: any = await $api.dbViewRow.delete(
       'noco',
-      base.value.id as string,
+      metaValue?.base_id ?? (base.value.id as string),
       metaValue?.id as string,
       viewMetaValue?.id as string,
       encodeURIComponent(id),
@@ -555,7 +556,7 @@ export function useData(args: {
         const fullRecord = await $api.dbTableRow.read(
           NOCO,
           // todo: base_id missing on view type
-          base?.value.id as string,
+          meta.value?.base_id ?? (base?.value.id as string),
           meta.value?.id as string,
           encodeURIComponent(id as string),
           {

@@ -1,26 +1,38 @@
 <script lang="ts" setup>
-import { UITypes, UITypesName, readonlyMetaAllowedTypes } from 'nocodb-sdk'
+import { UITypes, UITypesName, UITypesSearchTerms, readonlyMetaAllowedTypes } from 'nocodb-sdk'
 
 const props = defineProps<{
   options: typeof uiTypes
+  extraIcons?: Record<string, string>
 }>()
 
 const emits = defineEmits<{ selected: [UITypes] }>()
 
 const { options } = toRefs(props)
 
-const searchQuery = ref('')
-
 const { isMetaReadOnly } = useRoles()
 
-const filteredOptions = computed(
-  () =>
-    options.value?.filter(
-      (c) =>
-        c.name.toLowerCase().includes(searchQuery.value.toLowerCase()) ||
-        (UITypesName[c.name] && UITypesName[c.name].toLowerCase().includes(searchQuery.value.toLowerCase())),
-    ) ?? [],
-)
+const { showUpgradeToUseAiPromptField, showUpgradeToUseAiButtonField } = useEeConfig()
+
+const searchQuery = ref('')
+
+const searchBasisInfoMap = ref<Record<string, string>>({})
+
+const filteredOptions = computed(() => {
+  searchBasisInfoMap.value = {}
+
+  return (options.value || []).filter((c) => {
+    // Step 1: apply default filter
+    if (searchCompare([c.name, UITypesName[c.name]], searchQuery.value)) return true
+
+    // Step 2: apply search basis options
+    return searchCompare([...(UITypesSearchTerms[c.name] || [])], searchQuery.value, (matchKeyword) => {
+      if (!matchKeyword) return
+
+      searchBasisInfoMap.value[c.name] = `Matched by keyword: ${matchKeyword}`
+    })
+  })
+})
 
 const inputRef = ref()
 
@@ -32,6 +44,14 @@ const isDisabledUIType = (type: UITypes) => {
 
 const onClick = (uidt: UITypes) => {
   if (!uidt || isDisabledUIType(uidt)) return
+
+  if (uidt === AIPrompt && showUpgradeToUseAiPromptField()) {
+    return
+  }
+
+  if (uidt === AIButton && showUpgradeToUseAiButtonField()) {
+    return
+  }
 
   emits('selected', uidt)
 }
@@ -68,22 +88,25 @@ onMounted(() => {
   searchQuery.value = ''
   activeFieldIndex.value = options.value.findIndex((o) => o.name === UITypes.SingleLineText)
 })
+
+const { isSystem } = useColumnCreateStoreOrThrow()
 </script>
 
 <template>
   <div
-    class="flex-1 border-1 border-gray-200 rounded-lg flex flex-col py-2"
+    class="flex-1 border-1 border-gray-200 rounded-lg flex flex-col pb-2"
     data-testid="nc-column-uitypes-options-list-wrapper"
     @keydown.arrow-down.prevent="onArrowDown"
     @keydown.arrow-up.prevent="onArrowUp"
     @keydown.enter.prevent="onClick(filteredOptions[activeFieldIndex].name)"
   >
-    <div class="w-full pb-2 px-2" @click.stop>
+    <div class="w-full mb-2 !border-b-1" @click.stop>
       <a-input
         ref="inputRef"
         v-model:value="searchQuery"
-        placeholder="Search field type"
-        class="nc-column-type-search-input nc-toolbar-dropdown-search-field-input"
+        :placeholder="`${$t('general.search')} ${$t('labels.columnType').toLowerCase()}`"
+        class="nc-column-type-search-input nc-toolbar-dropdown-search-field-input !border-none !shadow-none !py-2 !rounded-t-lg"
+        :disabled="isSystem"
         @keydown.enter.stop="handleKeydownEnter"
         @change="activeFieldIndex = 0"
       >
@@ -114,20 +137,38 @@ onMounted(() => {
               'hover:bg-gray-100 cursor-pointer': !isDisabledUIType(option.name),
               'bg-gray-100 nc-column-list-option-active': activeFieldIndex === index && !isDisabledUIType(option.name),
               '!text-gray-400 cursor-not-allowed': isDisabledUIType(option.name),
+              '!text-nc-content-purple-dark': [AIButton, AIPrompt].includes(option.name),
             },
           ]"
           :data-testid="option.name"
           @click="onClick(option.name)"
         >
-          <div class="flex gap-2 items-center">
+          <div class="flex flex-1 gap-2 items-center">
             <component
               :is="option.icon"
               class="w-4 h-4"
               :class="isDisabledUIType(option.name) ? '!text-gray-400' : 'text-gray-700'"
             />
-            <div class="flex-1 text-sm">{{ UITypesName[option.name] }}</div>
+            <div
+              class="text-sm"
+              :class="{
+                'flex-1': !searchBasisInfoMap[option.name],
+              }"
+            >
+              {{ UITypesName[option.name] }}
+            </div>
+            <div v-if="searchBasisInfoMap[option.name]" class="flex-1 flex">
+              <NcTooltip :title="searchBasisInfoMap[option.name]" class="flex cursor-help">
+                <GeneralIcon icon="info" class="flex-none h-3.5 w-3.5 text-nc-content-gray-muted" />
+              </NcTooltip>
+            </div>
+
             <span v-if="option.deprecated" class="!text-xs !text-gray-300">({{ $t('general.deprecated') }})</span>
+            <span v-if="option.isNew" class="text-sm text-nc-content-purple-dark bg-purple-50 px-2 rounded-md">{{
+              $t('general.new')
+            }}</span>
           </div>
+          <GeneralIcon v-if="extraIcons && extraIcons[option.name]" class="!text-gray-500" :icon="extraIcons[option.name]" />
         </div>
       </GeneralSourceRestrictionTooltip>
     </div>

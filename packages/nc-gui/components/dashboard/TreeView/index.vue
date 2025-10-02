@@ -5,7 +5,7 @@ import ProjectWrapper from './ProjectWrapper.vue'
 
 const { isUIAllowed } = useRoles()
 
-const { $e } = useNuxtApp()
+const { $e, $api } = useNuxtApp()
 
 const router = useRouter()
 
@@ -23,11 +23,25 @@ const baseCreateDlg = ref(false)
 
 const baseStore = useBase()
 
+const { loadTables } = baseStore
+
 const { isSharedBase, base } = storeToRefs(baseStore)
 
-const { activeTable: _activeTable } = storeToRefs(useTablesStore())
+const tablesStore = useTablesStore()
+
+const { loadProjectTables } = tablesStore
+
+const { activeTable: _activeTable } = storeToRefs(tablesStore)
 
 const { isMobileMode } = useGlobal()
+
+const { setMeta } = useMetas()
+
+const { allRecentViews } = storeToRefs(useViewsStore())
+
+const { refreshCommandPalette } = useCommandPalette()
+
+const { addUndo, defineProjectScope } = useUndoRedo()
 
 const contextMenuTarget = reactive<{ type?: 'base' | 'source' | 'table' | 'main' | 'layout'; value?: any }>({})
 
@@ -76,24 +90,79 @@ function openTableDescriptionDialog(table: TableType) {
   }
 }
 
-function openRenameTableDialog(table: TableType, _ = false) {
+/**
+ * tableRenameId is combination of tableId & sourceId
+ * @example `${tableId}:${sourceId}`
+ */
+const tableRenameId = ref('')
+
+async function handleTableRename(
+  table: TableType,
+  title: string,
+  originalTitle: string,
+  updateTitle: (title: string) => void,
+  undo = false,
+  disableTitleDiffCheck?: boolean,
+) {
   if (!table || !table.source_id) return
 
-  $e('c:table:rename')
+  if (title) {
+    title = title.trim()
+  }
 
-  const isOpen = ref(true)
+  if (title === originalTitle && !disableTitleDiffCheck) return
 
-  const { close } = useDialog(resolveComponent('DlgTableRename'), {
-    'modelValue': isOpen,
-    'tableMeta': table,
-    'sourceId': table.source_id, // || sources.value[0].id,
-    'onUpdate:modelValue': closeDialog,
-  })
+  updateTitle(title)
 
-  function closeDialog() {
-    isOpen.value = false
+  try {
+    await $api.dbTable.update(table.id as string, {
+      base_id: table.base_id,
+      table_name: title,
+      title,
+    })
 
-    close(1000)
+    await loadProjectTables(table.base_id!, true)
+
+    if (!undo) {
+      addUndo({
+        redo: {
+          fn: (table: TableType, t: string, ot: string, updateTitle: (title: string) => void) => {
+            handleTableRename(table, t, ot, updateTitle, true, true)
+          },
+          args: [table, title, originalTitle, updateTitle],
+        },
+        undo: {
+          fn: (table: TableType, t: string, ot: string, updateTitle: (title: string) => void) => {
+            handleTableRename(table, t, ot, updateTitle, true, true)
+          },
+          args: [table, originalTitle, title, updateTitle],
+        },
+        scope: defineProjectScope({ model: table }),
+      })
+    }
+
+    await loadTables()
+
+    // update recent views if default view is renamed
+    allRecentViews.value = allRecentViews.value.map((v) => {
+      if (v.tableID === table.id) {
+        if (v.isDefault) v.viewName = title
+
+        v.tableName = title
+      }
+      return v
+    })
+
+    // update metas
+    const newMeta = await $api.dbTable.read(table.id as string)
+    await setMeta(newMeta)
+
+    refreshCommandPalette()
+
+    $e('a:table:rename')
+  } catch (e: any) {
+    message.error(await extractSdkResponseErrorMsg(e))
+    updateTitle(originalTitle)
   }
 }
 
@@ -106,7 +175,7 @@ function openTableCreateDialog(sourceId?: string, baseId?: string) {
 
   const { close } = useDialog(resolveComponent('DlgTableCreate'), {
     'modelValue': isOpen,
-    'sourceId': sourceId, // || sources.value[0].id,
+    'sourceId': sourceId,
     'baseId': baseId || basesList.value[0].id,
     'onUpdate:modelValue': closeDialog,
   })
@@ -203,10 +272,11 @@ const handleContext = (e: MouseEvent) => {
 provide(TreeViewInj, {
   setMenuContext,
   duplicateTable,
-  openRenameTableDialog,
+  handleTableRename,
   openViewDescriptionDialog,
   openTableDescriptionDialog,
   contextMenuTarget,
+  tableRenameId,
 })
 
 useEventListener(document, 'contextmenu', handleContext, true)
@@ -269,15 +339,17 @@ watch(
 
 <template>
   <div class="nc-treeview-container flex flex-col justify-between select-none">
-    <div v-if="!isSharedBase" class="text-gray-500 font-medium pl-3.5 mb-1">{{ $t('objects.projects') }}</div>
+    <div v-if="!isSharedBase" class="text-nc-content-gray-muted font-medium pl-3.5 mb-1">{{ $t('objects.projects') }}</div>
     <div mode="inline" class="nc-treeview pb-0.5 flex-grow min-h-50 overflow-x-hidden">
       <div v-if="basesList?.length">
         <Draggable
+          v-bind="getDraggableAutoScrollOptions({ scrollSensitivity: 50 })"
           :model-value="basesList"
           :disabled="isMobileMode || !isUIAllowed('baseReorder') || basesList?.length < 2"
           item-key="id"
           handle=".base-title-node"
           ghost-class="ghost"
+          :filter="isTouchEvent"
           @change="onMove($event)"
         >
           <template #item="{ element: baseItem }">

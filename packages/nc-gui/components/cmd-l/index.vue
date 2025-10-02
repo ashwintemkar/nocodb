@@ -62,8 +62,8 @@ onKeyUp('Enter', async () => {
 })
 
 function scrollToTarget() {
-  const element = document.querySelector('.cmdk-action.selected')
-  element?.scrollIntoView()
+  const element = document.querySelector('.cmdk-action.cmd-l.selected')
+  element?.scrollIntoView({ behavior: 'smooth', block: 'center' })
 }
 
 const moveUp = () => {
@@ -132,7 +132,7 @@ useEventListener('keydown', (e: KeyboardEvent) => {
   if (e.key === 'Escape') {
     hide()
   } else if (e.key === 'Enter') {
-    if (newView.value) {
+    if (newView.value && vOpen.value) {
       changeView({ viewId: newView.value.viewId, tableId: newView.value.tableId, baseId: newView.value.baseId })
     }
   } else if (e.key === 'ArrowUp') {
@@ -182,7 +182,7 @@ onMounted(() => {
 <template>
   <div v-if="vOpen" class="cmdk-modal cmdl-modal" :class="{ 'cmdk-modal-active cmdl-modal-active': vOpen }">
     <div ref="modalEl" class="cmdk-modal-content cmdl-modal-content relative h-[25.25rem]">
-      <div class="cmdk-input-wrapper">
+      <div class="cmdk-input-wrapper border-b-1 border-gray-200">
         <GeneralIcon class="h-4 w-4 text-gray-500" icon="search" />
         <input ref="cmdInputEl" v-model="search" class="cmdk-input" placeholder="Search" type="text" />
       </div>
@@ -200,14 +200,14 @@ onMounted(() => {
               :class="{
                 selected: selected === cmdOption.tableID + cmdOption.viewName,
               }"
-              class="cmdk-action"
+              class="cmdk-action cmd-l"
               @click="changeView({ viewId: cmdOption.viewId!, tableId: cmdOption.tableID, baseId: cmdOption.baseId })"
             >
               <div class="cmdk-action-content">
                 <div class="flex w-1/2 items-center">
                   <div class="flex gap-2">
                     <GeneralViewIcon :meta="{ type: cmdOption.viewType }" class="mt-0.5 w-4 !min-h-4" />
-                    <a-tooltip overlay-class-name="!px-2 !py-1 !rounded-lg">
+                    <a-tooltip overlay-class-name="!px-2 !py-1 !rounded-lg" :tooltip-style="{ zIndex: 1100 }">
                       <template #title>
                         {{ cmdOption.viewName }}
                       </template>
@@ -219,8 +219,8 @@ onMounted(() => {
                 </div>
                 <div class="flex w-1/2 justify-end text-gray-600">
                   <div class="flex gap-2 px-2 py-1 rounded-md items-center">
-                    <component :is="iconMap.project" class="w-3 h-3" />
-                    <a-tooltip overlay-class-name="!px-2 !py-1 !rounded-lg">
+                    <component :is="iconMap.project" class="w-4 h-4" />
+                    <a-tooltip overlay-class-name="!px-2 !py-1 !rounded-lg" :tooltip-style="{ zIndex: 1100 }">
                       <template #title>
                         {{ cmdOption.baseName }}
                       </template>
@@ -231,7 +231,7 @@ onMounted(() => {
                     <span class="text-bold"> / </span>
 
                     <component :is="iconMap.table" class="w-3 h-3" />
-                    <a-tooltip overlay-class-name="!px-2 !py-1 !rounded-lg">
+                    <a-tooltip overlay-class-name="!px-2 !py-1 !rounded-lg" :tooltip-style="{ zIndex: 1100 }">
                       <template #title>
                         {{ cmdOption.tableName }}
                       </template>
@@ -271,7 +271,7 @@ onMounted(() => {
   width: 100%;
   height: 100%;
   background-color: rgba(255, 255, 255, 0.5);
-  z-index: 1000;
+  z-index: 1100;
 
   color: rgb(60, 65, 73);
   font-size: 16px;
@@ -290,7 +290,7 @@ onMounted(() => {
     &.selected {
       cursor: pointer;
       background-color: rgb(248, 249, 251);
-      border-left: 4px solid #36f;
+      border-left: 4px solid #3366ff;
       outline: none;
     }
 

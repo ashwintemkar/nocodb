@@ -34,10 +34,6 @@ const rolePermissions = {
       baseDelete: true,
       baseDuplicate: true,
       newUser: true,
-      tableRename: true,
-      tableDelete: true,
-      viewCreateOrEdit: true,
-      baseReorder: true,
       orgAdminPanel: true,
       workspaceAuditList: true,
       workspaceIntegrations: true,
@@ -53,6 +49,8 @@ const rolePermissions = {
   [ProjectRoles.OWNER]: {
     include: {
       baseDelete: true,
+      manageSnapshot: true,
+      migrateBase: true,
     },
   },
   [ProjectRoles.CREATOR]: {
@@ -72,6 +70,7 @@ const rolePermissions = {
       airtableImport: true,
       jsonImport: true,
       excelImport: true,
+      nocodbImport: true,
       settingsPage: true,
       webhook: true,
       fieldEdit: true,
@@ -88,6 +87,13 @@ const rolePermissions = {
       baseDuplicate: true,
       sourceCreate: true,
       baseAuditList: true,
+
+      extensionList: true,
+
+      // Row colouring
+      rowColourUpdate: true,
+
+      projectOverviewTab: true,
     },
   },
   [ProjectRoles.EDITOR]: {
@@ -118,8 +124,9 @@ const rolePermissions = {
 
       commentList: true,
       commentCount: true,
-      auditListRow: true,
+      recordAuditList: true,
       newUser: true,
+      manageMCP: true,
     },
   },
   [ProjectRoles.NO_ACCESS]: {
@@ -138,6 +145,7 @@ export const sourceRestrictions = {
     csvImport: true,
     jsonImport: true,
     excelImport: true,
+    nocodbImport: true,
     duplicateColumn: true,
     duplicateModel: true,
     tableDuplicate: true,
@@ -151,6 +159,7 @@ export const sourceRestrictions = {
     csvImport: true,
     jsonImport: true,
     excelImport: true,
+    nocodbImport: true,
     duplicateColumn: true,
     duplicateModel: true,
   },

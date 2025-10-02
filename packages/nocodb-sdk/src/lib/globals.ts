@@ -1,4 +1,37 @@
+import { ColumnType, FilterType } from './Api';
 import { OrgUserRoles, ProjectRoles, WorkspaceUserRoles } from './enums';
+import { PlanTitles } from './payment';
+
+export const enumColors = {
+  light: [
+    '#cfdffe',
+    '#d0f1fd',
+    '#c2f5e8',
+    '#ffdaf6',
+    '#ffdce5',
+    '#fee2d5',
+    '#ffeab6',
+    '#d1f7c4',
+    '#ede2fe',
+    '#eeeeee',
+  ],
+  dark: [
+    '#2d7ff999',
+    '#18bfff99',
+    '#20d9d299',
+    '#ff08c299',
+    '#f82b6099',
+    '#ff6f2c99',
+    '#fcb40099',
+    '#20c93399',
+    '#8b46ff99',
+    '#666',
+  ],
+  get: (theme: 'light' | 'dark', index: number) => {
+    index = Math.abs(index) % enumColors[theme].length;
+    return enumColors[theme][index];
+  },
+};
 
 export enum ViewTypes {
   FORM = 1,
@@ -8,6 +41,29 @@ export enum ViewTypes {
   MAP = 5,
   CALENDAR = 6,
 }
+
+export const viewTypeAlias: Record<ViewTypes, string> = {
+  [ViewTypes.FORM]: 'form',
+  [ViewTypes.GALLERY]: 'gallery',
+  [ViewTypes.GRID]: 'grid',
+  [ViewTypes.KANBAN]: 'kanban',
+  [ViewTypes.MAP]: 'map',
+  [ViewTypes.CALENDAR]: 'calendar',
+};
+
+export const viewTypeToStringMap: Record<ViewTypes, string> = {
+  ...viewTypeAlias,
+};
+
+// Generate reverse mapping from the original viewTypeAlias
+export const stringToViewTypeMap: Record<string, ViewTypes> = Object.entries(
+  viewTypeAlias
+).reduce((acc, [key, value]) => {
+  acc[value] = Number(key);
+  return acc;
+}, {});
+
+export const VIEW_GRID_DEFAULT_WIDTH = 200;
 
 export enum ProjectTypes {
   DATABASE = 'database',
@@ -23,92 +79,19 @@ export enum RelationTypes {
   ONE_TO_ONE = 'oo',
 }
 
+export const ExpandedFormMode = {
+  FIELD: 'field',
+  ATTACHMENT: 'attachment',
+  DISCUSSION: 'discussion',
+} as const;
+
+export type ExpandedFormModeType =
+  (typeof ExpandedFormMode)[keyof typeof ExpandedFormMode];
+
 export enum ExportTypes {
   EXCEL = 'excel',
   CSV = 'csv',
 }
-
-export enum AuditOperationTypes {
-  COMMENT = 'COMMENT',
-  DATA = 'DATA',
-  PROJECT = 'PROJECT',
-  VIRTUAL_RELATION = 'VIRTUAL_RELATION',
-  RELATION = 'RELATION',
-  TABLE_VIEW = 'TABLE_VIEW',
-  TABLE = 'TABLE',
-  VIEW = 'VIEW',
-  META = 'META',
-  TABLE_COLUMN = 'TABLE_COLUMN',
-  WEBHOOKS = 'WEBHOOKS',
-  AUTHENTICATION = 'AUTHENTICATION',
-  ORG_USER = 'ORG_USER',
-}
-
-export const auditOperationTypeLabels = {
-  [AuditOperationTypes.COMMENT]: 'Comment',
-  [AuditOperationTypes.DATA]: 'Data',
-  [AuditOperationTypes.PROJECT]: 'Project',
-  [AuditOperationTypes.VIRTUAL_RELATION]: 'Virtual Relation',
-  [AuditOperationTypes.RELATION]: 'Relation',
-  [AuditOperationTypes.TABLE_VIEW]: 'Table View',
-  [AuditOperationTypes.TABLE]: 'Table',
-  [AuditOperationTypes.VIEW]: 'View',
-  [AuditOperationTypes.META]: 'Meta',
-  [AuditOperationTypes.WEBHOOKS]: 'Webhooks',
-  [AuditOperationTypes.AUTHENTICATION]: 'Authentication',
-  [AuditOperationTypes.TABLE_COLUMN]: 'Table Column',
-  [AuditOperationTypes.ORG_USER]: 'Org User',
-};
-
-export enum AuditOperationSubTypes {
-  INSERT = 'INSERT',
-  CREATE = 'CREATE',
-  UPDATE = 'UPDATE',
-  DELETE = 'DELETE',
-  BULK_INSERT = 'BULK_INSERT',
-  BULK_UPDATE = 'BULK_UPDATE',
-  BULK_DELETE = 'BULK_DELETE',
-  LINK_RECORD = 'LINK_RECORD',
-  UNLINK_RECORD = 'UNLINK_RECORD',
-  RENAME = 'RENAME',
-  IMPORT_FROM_ZIP = 'IMPORT_FROM_ZIP',
-  EXPORT_TO_FS = 'EXPORT_TO_FS',
-  EXPORT_TO_ZIP = 'EXPORT_TO_ZIP',
-  SIGNIN = 'SIGNIN',
-  SIGNUP = 'SIGNUP',
-  PASSWORD_RESET = 'PASSWORD_RESET',
-  PASSWORD_FORGOT = 'PASSWORD_FORGOT',
-  PASSWORD_CHANGE = 'PASSWORD_CHANGE',
-  EMAIL_VERIFICATION = 'EMAIL_VERIFICATION',
-  ROLES_MANAGEMENT = 'ROLES_MANAGEMENT',
-  INVITE = 'INVITE',
-  RESEND_INVITE = 'RESEND_INVITE',
-}
-
-export const auditOperationSubTypeLabels = {
-  [AuditOperationSubTypes.UPDATE]: 'Update',
-  [AuditOperationSubTypes.INSERT]: 'Insert',
-  [AuditOperationSubTypes.DELETE]: 'Delete',
-  [AuditOperationSubTypes.BULK_INSERT]: 'Bulk Insert',
-  [AuditOperationSubTypes.BULK_UPDATE]: 'Bulk Update',
-  [AuditOperationSubTypes.BULK_DELETE]: 'Bulk Delete',
-  [AuditOperationSubTypes.LINK_RECORD]: 'Link Record',
-  [AuditOperationSubTypes.UNLINK_RECORD]: 'Unlink Record',
-  [AuditOperationSubTypes.CREATE]: 'Create',
-  [AuditOperationSubTypes.RENAME]: 'Rename',
-  [AuditOperationSubTypes.IMPORT_FROM_ZIP]: 'Import From Zip',
-  [AuditOperationSubTypes.EXPORT_TO_FS]: 'Export To FS',
-  [AuditOperationSubTypes.EXPORT_TO_ZIP]: 'Export To Zip',
-  [AuditOperationSubTypes.SIGNIN]: 'Signin',
-  [AuditOperationSubTypes.SIGNUP]: 'Signup',
-  [AuditOperationSubTypes.PASSWORD_RESET]: 'Password Reset',
-  [AuditOperationSubTypes.PASSWORD_FORGOT]: 'Password Forgot',
-  [AuditOperationSubTypes.PASSWORD_CHANGE]: 'Password Change',
-  [AuditOperationSubTypes.EMAIL_VERIFICATION]: 'Email Verification',
-  [AuditOperationSubTypes.ROLES_MANAGEMENT]: 'Roles Management',
-  [AuditOperationSubTypes.INVITE]: 'Invite',
-  [AuditOperationSubTypes.RESEND_INVITE]: 'Resend Invite',
-};
 
 export enum PluginCategory {
   STORAGE = 'Storage',
@@ -118,6 +101,7 @@ export enum PluginCategory {
 export enum ModelTypes {
   TABLE = 'table',
   VIEW = 'view',
+  DASHBOARD = 'dashboard',
 }
 
 export enum ProjectStatus {
@@ -167,6 +151,7 @@ export enum NcDataErrorCodes {
 
 export enum NcErrorType {
   AUTHENTICATION_REQUIRED = 'AUTHENTICATION_REQUIRED',
+  FORBIDDEN = 'FORBIDDEN',
   API_TOKEN_NOT_ALLOWED = 'API_TOKEN_NOT_ALLOWED',
   WORKSPACE_NOT_FOUND = 'WORKSPACE_NOT_FOUND',
   BASE_NOT_FOUND = 'BASE_NOT_FOUND',
@@ -181,6 +166,7 @@ export enum NcErrorType {
   ERROR_DUPLICATE_RECORD = 'ERROR_DUPLICATE_RECORD',
   USER_NOT_FOUND = 'USER_NOT_FOUND',
   INVALID_OFFSET_VALUE = 'INVALID_OFFSET_VALUE',
+  INVALID_PAGE_VALUE = 'INVALID_PAGE_VALUE',
   INVALID_LIMIT_VALUE = 'INVALID_LIMIT_VALUE',
   INVALID_FILTER = 'INVALID_FILTER',
   INVALID_SHARED_VIEW_PASSWORD = 'INVALID_SHARED_VIEW_PASSWORD',
@@ -196,8 +182,93 @@ export enum NcErrorType {
   INTEGRATION_NOT_FOUND = 'INTEGRATION_NOT_FOUND',
   INTEGRATION_LINKED_WITH_BASES = 'INTEGRATION_LINKED_WITH_BASES',
   FORMULA_ERROR = 'FORMULA_ERROR',
+  FORMULA_CIRCULAR_REF_ERROR = 'FORMULA_CIRCULAR_REF_ERROR',
   PERMISSION_DENIED = 'PERMISSION_DENIED',
+  INVALID_ATTACHMENT_UPLOAD_SCOPE = 'INVALID_ATTACHMENT_UPLOAD_SCOPE',
+  CANNOT_CALCULATE_INTERMEDIATE_ORDER = 'CANNOT_CALCULATE_INTERMEDIATE_ORDER',
+  REORDER_FAILED = 'REORDER_FAILED',
+  PLAN_LIMIT_EXCEEDED = 'PLAN_LIMIT_EXCEEDED',
+  FEATURE_NOT_SUPPORTED = 'FEATURE_NOT_SUPPORTED',
+  SSO_LOGIN_REQUIRED = 'SSO_LOGIN_REQUIRED',
+  SSO_GENERATED_TOKEN_REQUIRED = 'SSO_GENERATED_TOKEN_REQUIRED',
+  MAX_INSERT_LIMIT_EXCEEDED = 'MAX_INSERT_LIMIT_EXCEEDED',
+  INVALID_VALUE_FOR_FIELD = 'INVALID_VALUE_FOR_FIELD',
+  MAX_WORKSPACE_LIMIT_REACHED = 'MAX_WORKSPACE_LIMIT_REACHED',
+  BASE_USER_ERROR = 'BASE_USER_ERROR',
+  PROHIBITED_SYNC_TABLE_OPERATION = 'PROHIBITED_SYNC_TABLE_OPERATION',
+  INVALID_REQUEST_BODY = 'INVALID_REQUEST_BODY',
+  DASHBOARD_NOT_FOUND = 'DASHBOARD_NOT_FOUND',
+  WIDGET_NOT_FOUND = 'WIDGET_NOT_FOUND',
+  INVALID_SHARED_DASHBOARD_PASSWORD = 'INVALID_SHARED_DASHBOARD_PASSWORD',
+  DUPLICATE_ALIAS = 'DUPLICATE_ALIAS',
+  OUT_OF_SYNC = 'OUT_OF_SYNC',
+  FILTER_VERIFICATION_FAILED = 'FILTER_VERIFICATION_FAILED',
 }
+
+export enum ROW_COLORING_MODE {
+  FILTER = 'filter',
+  SELECT = 'select',
+}
+
+export const LongTextAiMetaProp = 'ai';
+
+export const NO_SCOPE = 'nc';
+
+export const NON_SEAT_ROLES = [
+  WorkspaceUserRoles.NO_ACCESS,
+  WorkspaceUserRoles.VIEWER,
+  WorkspaceUserRoles.COMMENTER,
+  ProjectRoles.NO_ACCESS,
+  ProjectRoles.VIEWER,
+  ProjectRoles.COMMENTER,
+];
+
+export const DURATION_TYPE_MAP = {
+  0: 'h:mm',
+  1: 'h:mm:ss',
+  2: 'h:mm:ss.s',
+  3: 'h:mm:ss.ss',
+  4: 'h:mm:ss.sss',
+  'h:mm': 0,
+  'h:mm:ss': 1,
+  'h:mm:ss.s': 2,
+  'h:mm:ss.ss': 3,
+  'h:mm:ss.sss': 4,
+};
+
+export const CURRENT_USER_TOKEN = '@me';
+
+// this type makes every parameter inside an object be optional
+// useful for where / insert / update query
+export type DeepPartial<T> = T extends object
+  ? { [P in keyof T]?: DeepPartial<T[P]> }
+  : T;
+
+export type RowColoringInfoFilterRow = {
+  id: string;
+  is_set_as_background: boolean;
+  nc_order: number;
+  color: string;
+  conditions: FilterType[];
+  nestedConditions: FilterType[];
+};
+
+export type RowColoringInfoSelect = {
+  mode: ROW_COLORING_MODE.SELECT;
+  fk_column_id: string;
+  options: { title: string; color: string }[];
+  selectColumn: ColumnType;
+  is_set_as_background: boolean;
+};
+export type RowColoringInfoFilter = {
+  mode: ROW_COLORING_MODE.FILTER;
+  conditions: RowColoringInfoFilterRow[];
+};
+
+export type RowColoringInfo = {
+  fk_model_id: string;
+  fk_view_id: string;
+} & (RowColoringInfoSelect | RowColoringInfoFilter);
 
 type Roles = OrgUserRoles | ProjectRoles | WorkspaceUserRoles;
 
@@ -205,4 +276,30 @@ type RolesObj = Partial<Record<Roles, boolean>>;
 
 type RolesType = RolesObj | string[] | string;
 
-export { Roles, RolesObj, RolesType };
+interface PlanLimitExceededDetailsType {
+  plan?: PlanTitles;
+  limit?: number;
+  current?: number;
+  higherPlan?: PlanTitles;
+}
+
+export { Roles, RolesObj, RolesType, PlanLimitExceededDetailsType };
+
+export type RowColoringMode = null | 'SELECT' | 'FILTER';
+
+export enum RowHeight {
+  SHORT = 0,
+  MEDIUM = 1,
+  TALL = 2,
+  EXTRA = 3,
+}
+export const RowHeightMap = {
+  short: RowHeight.SHORT,
+  medium: RowHeight.MEDIUM,
+  tall: RowHeight.TALL,
+  extra: RowHeight.EXTRA,
+  [RowHeight.SHORT]: 'short',
+  [RowHeight.MEDIUM]: 'medium',
+  [RowHeight.TALL]: 'tall',
+  [RowHeight.EXTRA]: 'extra',
+};

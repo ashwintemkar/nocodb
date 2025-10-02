@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import Draggable from 'vuedraggable'
-import type { SourceType } from 'nocodb-sdk'
+import { PlanLimitTypes, type SourceType } from 'nocodb-sdk'
 import { ClientType } from '#imports'
 
 interface Props {
@@ -30,6 +30,8 @@ const { isUIAllowed } = useRoles()
 const { projectPageTab } = storeToRefs(useConfigStore())
 
 const { refreshCommandPalette } = useCommandPalette()
+
+const { updateStatLimit, showExternalSourcePlanLimitExceededModal } = useEeConfig()
 
 const sources = ref<SourceType[]>([])
 
@@ -66,11 +68,22 @@ async function updateIfSourceOrderIsNullOrDuplicate() {
     return (a.order ?? 0) - (b.order ?? 0)
   })
 
+  let initialOrder = 1
+
+  if (!(sources.value[0]!.is_local || sources.value[0]!.is_meta)) {
+    // If default source not found, and only one source, return
+    if (sources.value.length === 1) return
+
+    // If default source not found and more than one source, set initial order to 2
+    // because order 1 is for default source
+    initialOrder = 2
+  }
+
   // update the local state
-  sources.value = sources.value.map((source, i) => {
+  sources.value = sources.value.map((source) => {
     return {
       ...source,
-      order: i + 1,
+      order: initialOrder++,
     }
   })
 
@@ -131,6 +144,7 @@ const deleteBase = async () => {
     $e('a:source:delete')
 
     sources.value.splice(sources.value.indexOf(toBeDeletedBase.value), 1)
+    updateStatLimit(PlanLimitTypes.LIMIT_EXTERNAL_SOURCE_PER_WORKSPACE, -1)
     await loadProject(base.value.id as string, true)
   } catch (e: any) {
     message.error(await extractSdkResponseErrorMsg(e))
@@ -198,6 +212,10 @@ const moveBase = async (e: any) => {
 watch(
   projectPageTab,
   () => {
+    if (searchQuery.value) {
+      searchQuery.value = ''
+    }
+
     if (projectPageTab.value === 'data-source') {
       loadBases()
     }
@@ -235,16 +253,12 @@ watch(
         clientType.value = ClientType.SQLITE
         vState.value = DataSourcesSubTab.New
         break
-      case ClientType.MSSQL:
-        clientType.value = ClientType.MSSQL
-        vState.value = DataSourcesSubTab.New
-        break
       case ClientType.SNOWFLAKE:
         clientType.value = ClientType.SNOWFLAKE
         vState.value = DataSourcesSubTab.New
         break
       case DataSourcesSubTab.New:
-        if (isDataSourceLimitReached.value) {
+        if (showExternalSourcePlanLimitExceededModal() || isDataSourceLimitReached.value) {
           vState.value = ''
         }
         break
@@ -299,7 +313,7 @@ const handleClickRow = (source: SourceType, tab?: string) => {
       <a-input
         v-model:value="searchQuery"
         type="text"
-        class="nc-search-data-source-input !max-w-90 nc-input-sm"
+        class="nc-search-data-source-input nc-input-border-on-value !max-w-90 nc-input-sm"
         placeholder="Search data source"
         allow-clear
       >
@@ -313,7 +327,12 @@ const handleClickRow = (source: SourceType, tab?: string) => {
         size="large"
         class="z-10 !px-2"
         type="primary"
-        @click="vState = DataSourcesSubTab.New"
+        @click="
+          () => {
+            if (showExternalSourcePlanLimitExceededModal()) return
+            vState = DataSourcesSubTab.New
+          }
+        "
       >
         <div class="flex flex-row items-center w-full gap-x-1">
           <component :is="iconMap.plus" />
@@ -351,7 +370,7 @@ const handleClickRow = (source: SourceType, tab?: string) => {
             </NcButton>
           </div>
 
-          <NcTabs v-model:activeKey="openedTab" class="nc-source-tab w-full h-[calc(100%_-_58px)] max-h-[calc(100%_-_58px)]">
+          <NcTabs v-model:active-key="openedTab" class="nc-source-tab w-full h-[calc(100%_-_58px)] max-h-[calc(100%_-_58px)]">
             <a-tab-pane v-if="!activeSource.is_meta && !activeSource.is_local" key="edit">
               <template #tab>
                 <div class="tab" data-testid="nc-connection-tab">
@@ -381,16 +400,7 @@ const handleClickRow = (source: SourceType, tab?: string) => {
                 />
               </div>
             </a-tab-pane>
-            <a-tab-pane v-if="sources && activeSource === sources[0]" key="audit">
-              <template #tab>
-                <div class="tab" data-testid="nc-audit-tab">
-                  <div>{{ $t('title.auditLogs') }}</div>
-                </div>
-              </template>
-              <div class="p-6 h-full">
-                <LazyDashboardSettingsBaseAudit :source-id="activeSource.id" />
-              </div>
-            </a-tab-pane>
+
             <a-tab-pane key="acl">
               <template #tab>
                 <div class="tab" data-testid="nc-acl-tab">
@@ -440,7 +450,13 @@ const handleClickRow = (source: SourceType, tab?: string) => {
             </div>
           </div>
           <div class="ds-table-body relative">
-            <Draggable :list="sources" item-key="id" handle=".ds-table-handle" @end="moveBase">
+            <Draggable
+              v-bind="getDraggableAutoScrollOptions({ scrollSensitivity: 56 })"
+              :list="sources"
+              item-key="id"
+              handle=".ds-table-handle"
+              @end="moveBase"
+            >
               <template v-if="'default'.includes(searchQuery.toLowerCase())" #header>
                 <div
                   v-if="sources[0]"
@@ -553,14 +569,14 @@ const handleClickRow = (source: SourceType, tab?: string) => {
                           <GeneralIcon icon="threeDotVertical" />
                         </NcButton>
                         <template #overlay>
-                          <NcMenu>
+                          <NcMenu variant="small">
                             <NcMenuItem @click="handleClickRow(source, 'edit')">
-                              <GeneralIcon class="text-gray-800" icon="edit" />
+                              <GeneralIcon icon="edit" />
                               <span>{{ $t('general.edit') }}</span>
                             </NcMenuItem>
 
                             <NcDivider />
-                            <NcMenuItem class="!text-red-500 !hover:bg-red-50" @click.stop="openDeleteBase(source)">
+                            <NcMenuItem danger @click.stop="openDeleteBase(source)">
                               <GeneralIcon icon="delete" />
                               {{ $t('general.remove') }}
                             </NcMenuItem>
@@ -593,7 +609,7 @@ const handleClickRow = (source: SourceType, tab?: string) => {
             class="flex items-center justify-center absolute left-0 top-0 w-full h-[calc(100%_-_45px)] z-10 pb-10 pointer-events-none"
           >
             <div class="flex flex-col justify-center items-center gap-2">
-              <GeneralLoader size="xlarge" />
+              <a-spin size="large" />
               <span class="text-center">{{ $t('general.loading') }}</span>
             </div>
           </div>

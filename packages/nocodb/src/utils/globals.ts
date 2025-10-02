@@ -1,6 +1,7 @@
 export enum MetaTable {
   PROJECT = 'nc_bases_v2',
   SOURCES = 'nc_sources_v2',
+  SOURCES_OLD = SOURCES,
   MODELS = 'nc_models_v2',
   COLUMNS = 'nc_columns_v2',
   COLUMN_VALIDATIONS = 'nc_columns_validations_v2',
@@ -12,6 +13,7 @@ export enum MetaTable {
   COL_FORMULA = 'nc_col_formula_v2',
   COL_QRCODE = 'nc_col_qrcode_v2',
   COL_BARCODE = 'nc_col_barcode_v2',
+  COL_LONG_TEXT = 'nc_col_long_text_v2',
   FILTER_EXP = 'nc_filter_exp_v2',
   // HOOK_FILTER_EXP = 'nc_hook_filter_exp_v2',
   SORT = 'nc_sort_v2',
@@ -36,6 +38,7 @@ export enum MetaTable {
   AUDIT = 'nc_audit_v2',
   HOOKS = 'nc_hooks_v2',
   HOOK_LOGS = 'nc_hook_logs_v2',
+  HOOK_TRIGGER_FIELDS = 'nc_hook_trigger_fields',
   PLUGIN = 'nc_plugins_v2',
   PROJECT_USERS = 'nc_base_users_v2',
   MODEL_ROLE_VISIBILITY = 'nc_disabled_models_for_role_v2',
@@ -56,12 +59,30 @@ export enum MetaTable {
   INTEGRATIONS_STORE = 'nc_integrations_store_v2',
   FILE_REFERENCES = 'nc_file_references',
   COL_BUTTON = 'nc_col_button_v2',
+  SNAPSHOT = 'nc_snapshots',
+  ROW_COLOR_CONDITIONS = 'nc_row_color_conditions',
+  DATA_REFLECTION = 'nc_data_reflection',
+  CUSTOM_URLS = 'nc_custom_urls_v2',
+  SCRIPTS = 'nc_scripts',
+  SYNC_CONFIGS = 'nc_sync_configs',
+  SYNC_MAPPINGS = 'nc_sync_mappings',
+  USAGE_STATS = 'nc_usage_stats',
+  MCP_TOKENS = 'nc_mcp_tokens',
+  DB_SERVERS = 'nc_db_servers',
+  PERMISSIONS = 'nc_permissions',
+  PERMISSION_SUBJECTS = 'nc_permission_subjects',
+  DASHBOARDS = 'nc_dashboards_v2',
+  WIDGETS = 'nc_widgets_v2',
 }
 
 export enum MetaTableOldV2 {
   PROJECT = 'nc_projects_v2',
   PROJECT_USERS = 'nc_project_users_v2',
   BASES = 'nc_bases_v2',
+  LAYOUT = 'nc_ds_layout_v2',
+  WIDGET = 'nc_ds_widget_v2',
+  DASHBOARD_PROJECT_DB_PROJECT_LINKINGS = 'nc_ds_dashboard_project_db_project_linkings_v2',
+  WIDGET_DB_DEPENDENCIES = 'nc_ds_widget_db_dependencies_v2',
 }
 
 export const orderedMetaTables = [
@@ -91,6 +112,7 @@ export const orderedMetaTables = [
   MetaTable.FILTER_EXP,
   MetaTable.HOOK_LOGS,
   MetaTable.HOOKS,
+  MetaTable.HOOK_TRIGGER_FIELDS,
   MetaTable.VIEWS,
   MetaTable.COL_FORMULA,
   MetaTable.COL_ROLLUP,
@@ -143,6 +165,7 @@ export enum CacheScope {
   COL_FORMULA = 'colFormula',
   COL_QRCODE = 'colQRCode',
   COL_BARCODE = 'colBarcode',
+  COL_LONG_TEXT = 'colLongText',
   FILTER_EXP = 'filterExp',
   SORT = 'sort',
   SHARED_VIEW = 'sharedView',
@@ -188,6 +211,22 @@ export enum CacheScope {
   COL_BUTTON = 'colButton',
   CMD_PALETTE = 'cmdPalette',
   PRODUCT_FEED = 'productFeed',
+  SNAPSHOT = 'snapshot',
+  DATA_REFLECTION = 'dataReflection',
+  CUSTOM_URLS = 'customUrls',
+  SCRIPTS = 'nc_scripts',
+  SYNC_CONFIGS = 'syncConfigs',
+  SYNC_MAPPINGS = 'syncMappings',
+  USAGE_STATS = 'usageStats',
+  RESOURCE_STATS = 'resourceStats',
+  STORAGE_STATS = 'storageStats',
+  CLOUD_FEATURES = 'cloudFeatures',
+  MCP_TOKEN = 'mcpToken',
+  DB_SERVERS = 'dbServers',
+  PERMISSION = 'permission',
+  PERMISSION_USER = 'permissionUser',
+  DASHBOARD = 'dashboard',
+  WIDGET = 'widget',
 }
 
 export enum CacheGetType {
@@ -205,7 +244,6 @@ export const DB_TYPES = <const>[
   'mysql2',
   'sqlite3',
   'mysql',
-  'mssql',
   'snowflake',
   'oracledb',
   'pg',
@@ -231,10 +269,34 @@ export const RootScopeTables = {
     MetaTable.NOTIFICATION,
     MetaTable.JOBS,
     MetaTable.FILE_REFERENCES,
+    MetaTable.DATA_REFLECTION,
     // Temporarily added need to be discussed within team
     MetaTable.AUDIT,
+    MetaTable.CUSTOM_URLS,
+    MetaTable.MCP_TOKENS,
   ],
   [RootScopes.BASE]: [MetaTable.PROJECT],
   // It's a special case and Workspace is equivalent to org in oss
-  [RootScopes.WORKSPACE]: [MetaTable.INTEGRATIONS],
+  [RootScopes.WORKSPACE]: [
+    MetaTable.INTEGRATIONS,
+    MetaTable.INTEGRATIONS_STORE,
+    // We need to clear fk_integration_id from following tables
+    MetaTable.COL_BUTTON,
+    MetaTable.COL_LONG_TEXT,
+  ],
 };
+
+export const CACHE_PREFIX =
+  process.env.NC_CACHE_PREFIX && process.env.NC_CACHE_PREFIX.trim().length > 0
+    ? process.env.NC_CACHE_PREFIX
+    : 'nc';
+
+export enum FilterCacheScope {
+  VIEW = 'view',
+  HOOK = 'hook',
+  COLUMN = 'column',
+  PARENT_COLUMN = 'parentColumn',
+  LINK_COL = 'linkCol',
+  WIDGET = 'widget',
+  PARENT = 'parent',
+}

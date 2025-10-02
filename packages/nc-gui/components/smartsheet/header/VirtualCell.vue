@@ -5,7 +5,10 @@ import {
   type FormulaType,
   type LinkToAnotherRecordType,
   type LookupType,
+  PermissionEntity,
+  PermissionKey,
   type RollupType,
+  type TableType,
   isLinksOrLTAR,
   readonlyMetaAllowedTypes,
 } from 'nocodb-sdk'
@@ -16,7 +19,9 @@ const props = defineProps<{
   hideMenu?: boolean
   required?: boolean | number
   hideIcon?: boolean
+  hideIconTooltip?: boolean
   isHiddenCol?: boolean
+  showLockIcon?: boolean
 }>()
 
 const { t } = useI18n()
@@ -39,13 +44,21 @@ const isDropDownOpen = ref(false)
 
 const enableDescription = ref(false)
 
-const isLocked = inject(IsLockedInj, ref(false))
-
 provide(ColumnInj, column)
+
+const { isAllowed } = usePermissions()
+
+const isAllowedToEditField = computed(() => {
+  if (!props.showLockIcon || !column.value?.id) return true
+
+  return isAllowed(PermissionEntity.FIELD, column.value.id, PermissionKey.RECORD_FIELD_EDIT)
+})
 
 const { metas } = useMetas()
 
 const { isUIAllowed, isMetaReadOnly } = useRoles()
+
+const isPublic = inject(IsPublicInj, ref(false))
 
 const meta = inject(MetaInj, ref())
 
@@ -56,6 +69,8 @@ const isForm = inject(IsFormInj, ref(false))
 const isExpandedForm = inject(IsExpandedFormOpenInj, ref(false))
 
 const isExpandedBulkUpdateForm = inject(IsExpandedBulkUpdateFormOpenInj, ref(false))
+
+const isSqlView = computed(() => (meta.value as TableType)?.type === 'view')
 
 const tableTile = computed(() => meta?.value?.title)
 
@@ -126,11 +141,12 @@ const showTooltipAlways = computed(() => {
 const columnOrder = ref<Pick<ColumnReqType, 'column_order'> | null>(null)
 
 const columnTypeName = computed(() => {
-  if (column.value.uidt === UITypes.LongText && parseProp(column?.value?.meta)?.richMode) {
-    return UITypesName.RichText
-  }
   if (column.value.uidt === UITypes.LinkToAnotherRecord && column.value.colOptions?.type === RelationTypes.ONE_TO_ONE) {
     return UITypesName[UITypes.Links]
+  }
+
+  if (isAiButton(column.value)) {
+    return UITypesName.AIButton
   }
 
   return column.value.uidt ? UITypesName[column.value.uidt] : ''
@@ -155,7 +171,9 @@ watch(editColumnDropdown, (val) => {
 })
 
 const openHeaderMenu = (e?: MouseEvent, description = false) => {
-  if (isLocked.value || (isExpandedForm.value && e?.type === 'dblclick') || isExpandedBulkUpdateForm.value) return
+  if ((isExpandedForm.value && e?.type === 'dblclick') || isExpandedBulkUpdateForm.value || isSqlView.value) {
+    return
+  }
 
   if (
     !isForm.value &&
@@ -171,8 +189,6 @@ const openHeaderMenu = (e?: MouseEvent, description = false) => {
 }
 
 const openDropDown = (e: Event) => {
-  if (isLocked.value) return
-
   if (isForm.value || (!isUIAllowed('fieldEdit') && !isMobileMode.value)) return
 
   e.preventDefault()
@@ -183,7 +199,7 @@ const openDropDown = (e: Event) => {
 
 const onVisibleChange = () => {
   editColumnDropdown.value = true
-  if (!editOrAddProviderRef.value?.isWebHookModalOpen()) {
+  if (!editOrAddProviderRef.value?.shouldKeepModalOpen()) {
     editColumnDropdown.value = false
     enableDescription.value = false
   }
@@ -222,12 +238,13 @@ const onClick = (e: Event) => {
     <div
       class="nc-virtual-cell-name-wrapper flex-1 flex items-center"
       :class="{
-        'max-w-[calc(100%_-_23px)]': !isExpandedForm,
+        'max-w-[calc(100%_-_23px)]': !isExpandedForm && !column.description?.length,
+        'max-w-[calc(100%_-_44px)]': !isExpandedForm && column.description?.length,
         'max-w-full': isExpandedForm && !isExpandedBulkUpdateForm,
       }"
     >
       <template v-if="column && !props.hideIcon">
-        <NcTooltip v-if="isGrid" class="flex items-center" placement="bottom">
+        <NcTooltip v-if="isGrid" :disabled="hideIconTooltip" class="flex items-center" placement="bottom">
           <template #title> {{ columnTypeName }} </template>
           <LazySmartsheetHeaderVirtualCellIcon />
         </NcTooltip>
@@ -250,16 +267,39 @@ const onClick = (e: Event) => {
       </NcTooltip>
 
       <span v-if="isVirtualColRequired(column, meta?.columns || []) || required" class="text-red-500">&nbsp;*</span>
+
+      <PermissionsTooltip
+        v-if="!isAllowedToEditField"
+        :entity="PermissionEntity.FIELD"
+        :entity-id="column.id"
+        :permission="PermissionKey.RECORD_FIELD_EDIT"
+        :show-pointer-event-none="false"
+        hide-on-click
+        class="!ml-1 flex children:flex"
+      >
+        <GeneralIcon icon="ncLock" class="nc-column-lock-icon flex-none w-3.5 h-3.5 opacity-90" />
+      </PermissionsTooltip>
+
       <GeneralIcon
-        v-if="isExpandedForm && !isMobileMode && isUIAllowed('fieldEdit') && !isExpandedBulkUpdateForm"
+        v-if="isExpandedForm && !isMobileMode && isUIAllowed('fieldEdit') && !isExpandedBulkUpdateForm && !hideMenu"
         icon="arrowDown"
-        class="flex-none cursor-pointer ml-1 group-hover:visible w-4 h-4"
+        class="nc-column-context-menu flex-none cursor-pointer ml-1 group-hover:visible w-4 h-4"
         :class="{
           visible: editColumnDropdown || isDropDownOpen,
           invisible: !(editColumnDropdown || isDropDownOpen),
         }"
       />
     </div>
+
+    <NcTooltip v-if="column.description?.length && isPublic && isGrid && !isExpandedForm && !hideMenu">
+      <template #title>
+        <div class="whitespace-pre-wrap break-words">{{ column.description }}</div>
+      </template>
+      <div>
+        <GeneralIcon icon="info" class="group-hover:opacity-100 !w-3.5 !h-3.5 !text-gray-500 flex-none" />
+      </div>
+    </NcTooltip>
+
     <template v-if="!hideMenu">
       <div v-if="!isExpandedForm" class="flex-1" />
 

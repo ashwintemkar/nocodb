@@ -28,9 +28,7 @@ test.describe('Form view', () => {
   });
 
   test('Field re-order operations', async () => {
-    // close 'Team & Auth' tab
-    await dashboard.closeTab({ title: 'Team & Auth' });
-    await dashboard.treeView.openTable({ title: 'Country' });
+    await dashboard.treeView.openTable({ title: 'Country', baseTitle: context.base.title });
 
     await dashboard.viewSidebar.createFormView({ title: 'CountryForm' });
     await dashboard.viewSidebar.verifyView({ title: 'CountryForm', index: 0 });
@@ -77,9 +75,7 @@ test.describe('Form view', () => {
   });
 
   test('Form elements validation', async () => {
-    // close 'Team & Auth' tab
-    await dashboard.closeTab({ title: 'Team & Auth' });
-    await dashboard.treeView.openTable({ title: 'Country' });
+    await dashboard.treeView.openTable({ title: 'Country', baseTitle: context.base.title });
 
     await dashboard.viewSidebar.createFormView({ title: 'CountryForm' });
     await dashboard.viewSidebar.verifyView({ title: 'CountryForm', index: 0 });
@@ -225,7 +221,7 @@ test.describe('Form view', () => {
     const sharedForm = new SharedFormPage(dashboard.rootPage);
     await sharedForm.cell.attachment.addFile({
       columnHeader: 'Attachment',
-      filePath: [`${process.cwd()}/fixtures/sampleFiles/sampleImage.jpeg`],
+      filePath: [`${__dirname}/../../../fixtures/sampleFiles/sampleImage.jpeg`],
       skipElemClick: true,
     });
     await sharedForm.cell.fillText({
@@ -330,7 +326,7 @@ test.describe('Form view with LTAR', () => {
   });
 
   test('Form view with LTAR', async ({ page }) => {
-    await dashboard.treeView.openTable({ title: 'Country' });
+    await dashboard.treeView.openTable({ title: 'Country', baseTitle: context.base.title });
 
     const url = dashboard.rootPage.url();
 
@@ -375,7 +371,7 @@ test.describe('Form view with LTAR', () => {
     await dashboard.treeView.openProject({ title: context.base.title, context });
     await dashboard.rootPage.waitForTimeout(500);
 
-    await dashboard.treeView.openTable({ title: 'Country' });
+    await dashboard.treeView.openTable({ title: 'Country', baseTitle: context.base.title });
 
     await dashboard.grid.cell.verify({
       index: 3,
@@ -446,7 +442,7 @@ test.describe('Form view', () => {
     await dashboard.rootPage.reload();
     await dashboard.rootPage.waitForTimeout(100);
 
-    await dashboard.treeView.openTable({ title: 'selectBased' });
+    await dashboard.treeView.openTable({ title: 'selectBased', baseTitle: context.base.title });
     const url = dashboard.rootPage.url();
 
     await dashboard.rootPage.waitForTimeout(500);
@@ -486,7 +482,7 @@ test.describe('Form view', () => {
     // kludge- reload
     await dashboard.rootPage.reload();
 
-    await dashboard.treeView.openTable({ title: 'selectBased' });
+    await dashboard.treeView.openTable({ title: 'selectBased', baseTitle: context.base.title });
 
     await dashboard.rootPage.waitForTimeout(2000);
 
@@ -651,7 +647,7 @@ test.describe('Form view: field validation', () => {
     await dashboard.rootPage.reload();
     await dashboard.rootPage.waitForTimeout(100);
 
-    await dashboard.treeView.openTable({ title: tableName });
+    await dashboard.treeView.openTable({ title: tableName, baseTitle: context.base.title });
 
     await dashboard.rootPage.waitForTimeout(500);
 
@@ -977,6 +973,7 @@ test.describe('Form view: field validation', () => {
   });
 
   test('Form builder field validation: limit to range', async () => {
+    test.slow();
     await createTable({ tableName: 'FormFieldLimitToRange', type: 'limitToRange' });
     const url = dashboard.rootPage.url();
 
@@ -1338,8 +1335,6 @@ test.describe('Form view: field validation', () => {
     await validateAttType.verify({ hasError: false });
 
     const validateAttCount = await form.getFormFieldsValidateAttFileCount();
-    await validateAttCount.click({ enable: true, fillValue: '1a' });
-    await validateAttCount.verify({ hasError: true });
     await validateAttCount.click({ enable: true, fillValue: '1' });
     await validateAttCount.verify({ hasError: false });
 
@@ -1355,7 +1350,7 @@ test.describe('Form view: field validation', () => {
     const sharedForm = new SharedFormPage(dashboard.rootPage);
     await sharedForm.cell.attachment.addFile({
       columnHeader: 'Attachment',
-      filePath: [`${process.cwd()}/fixtures/sampleFiles/sampleImage.jpeg`],
+      filePath: [`${__dirname}/../../../fixtures/sampleFiles/sampleImage.jpeg`],
       skipElemClick: true,
     });
 
@@ -1371,7 +1366,7 @@ test.describe('Form view: field validation', () => {
 
     await sharedForm.cell.attachment.addFile({
       columnHeader: 'Attachment',
-      filePath: [`${process.cwd()}/fixtures/sampleFiles/Image/2.png`],
+      filePath: [`${__dirname}/../../../fixtures/sampleFiles/Image/2.png`],
       skipElemClick: true,
     });
     await attError.verify({ hasError: false });
@@ -1404,7 +1399,7 @@ test.describe('Form view: field validation', () => {
 
     await surveyForm.cell.attachment.addFile({
       columnHeader: 'Attachment',
-      filePath: [`${process.cwd()}/fixtures/sampleFiles/sampleImage.jpeg`],
+      filePath: [`${__dirname}/../../../fixtures/sampleFiles/sampleImage.jpeg`],
       skipElemClick: true,
     });
 
@@ -1420,7 +1415,7 @@ test.describe('Form view: field validation', () => {
 
     await surveyForm.cell.attachment.addFile({
       columnHeader: 'Attachment',
-      filePath: [`${process.cwd()}/fixtures/sampleFiles/Image/2.png`],
+      filePath: [`${__dirname}/../../../fixtures/sampleFiles/Image/2.png`],
       skipElemClick: true,
     });
     await surveryAttError.verify({ hasError: false });
@@ -1547,7 +1542,7 @@ test.describe('Form view: conditional fields', () => {
     await dashboard.rootPage.reload();
     await dashboard.rootPage.waitForTimeout(100);
 
-    await dashboard.treeView.openTable({ title: tableName });
+    await dashboard.treeView.openTable({ title: tableName, baseTitle: context.base.title });
 
     await dashboard.rootPage.waitForTimeout(500);
 

@@ -27,6 +27,14 @@ const vPaginationData = useVModel(props, 'paginationData', emits)
 
 const disablePagination = toRef(props, 'disablePagination')
 
+const { metas } = useMetas()
+
+const baseStore = useBase()
+
+const { isMysql, isPg } = baseStore
+
+const { meta } = useSmartsheetStoreOrThrow()
+
 const { updateAggregate, getAggregations, visibleFieldsComputed, displayFieldComputed } = useViewAggregateOrThrow()
 
 const scrollLeft = toRef(props, 'scrollLeft')
@@ -101,10 +109,6 @@ const getAddnlMargin = (depth: number, ignoreCondition = false) => {
   }
   return 0
 }
-
-const renderAltOrOptlKey = () => {
-  return isMac() ? '⌥' : 'ALT'
-}
 </script>
 
 <template>
@@ -116,7 +120,10 @@ const renderAltOrOptlKey = () => {
       >
         <div
           v-if="displayFieldComputed.field && displayFieldComputed.column?.id"
-          class="flex items-center overflow-x-hidden hover:bg-gray-100 cursor-pointer text-gray-500 justify-end transition-all transition-linear px-3 py-2"
+          class="flex items-center overflow-x-hidden hover:bg-gray-100 text-gray-500 justify-end transition-all transition-linear px-3 py-2"
+          :class="{
+            'cursor-pointer': !isLocked,
+          }"
           :style="{
             'min-width': displayFieldComputed?.width,
             'max-width': displayFieldComputed?.width,
@@ -162,7 +169,7 @@ const renderAltOrOptlKey = () => {
               <div
                 v-if="!displayFieldComputed.field?.aggregation || displayFieldComputed.field?.aggregation === 'none'"
                 :class="{
-                  'group-hover:opacity-100': ![UITypes.SpecificDBType, UITypes.ForeignKey, UITypes.Button].includes(displayFieldComputed.column?.uidt!)
+                  'group-hover:opacity-100': !isLocked,
                 }"
                 class="text-gray-500 opacity-0 transition"
               >
@@ -178,10 +185,18 @@ const renderAltOrOptlKey = () => {
                 <div style="direction: rtl" class="flex gap-2 text-nowrap truncate overflow-hidden items-center">
                   <span class="text-gray-600 text-[12px] font-semibold">
                     {{
-                      formatAggregation(
+                      getFormattedAggrationValue(
                         displayFieldComputed.field.aggregation,
                         displayFieldComputed.value,
                         displayFieldComputed.column,
+                        [],
+                        {
+                          meta,
+                          metas,
+                          isMysql,
+                          isPg,
+                          col: displayFieldComputed.column,
+                        },
                       )
                     }}
                   </span>
@@ -198,10 +213,18 @@ const renderAltOrOptlKey = () => {
 
                     <span class="text-[12px] font-semibold">
                       {{
-                        formatAggregation(
+                        getFormattedAggrationValue(
                           displayFieldComputed.field.aggregation,
                           displayFieldComputed.value,
                           displayFieldComputed.column,
+                          [],
+                          {
+                            meta,
+                            metas,
+                            isMysql,
+                            isPg,
+                            col: displayFieldComputed.column,
+                          },
                         )
                       }}
                     </span>
@@ -213,7 +236,7 @@ const renderAltOrOptlKey = () => {
         </div>
 
         <template #overlay>
-          <NcMenu v-if="displayFieldComputed.field && displayFieldComputed.column?.id">
+          <NcMenu v-if="displayFieldComputed.field && displayFieldComputed.column?.id" variant="small">
             <NcMenuItem
               v-for="(agg, index) in getAggregations(displayFieldComputed.column)"
               :key="index"
@@ -244,7 +267,10 @@ const renderAltOrOptlKey = () => {
         overlay-class-name="max-h-96 relative scroll-container nc-scrollbar-md overflow-auto"
       >
         <div
-          class="flex items-center overflow-hidden justify-end group hover:bg-gray-100 cursor-pointer text-gray-500 transition-all transition-linear px-3 py-2"
+          class="flex items-center overflow-hidden justify-end group hover:bg-gray-100 text-gray-500 transition-all transition-linear px-3 py-2"
+          :class="{
+            'cursor-pointer': !isLocked,
+          }"
           :style="{
             'min-width': width,
             'max-width': width,
@@ -255,8 +281,8 @@ const renderAltOrOptlKey = () => {
             <div
               v-if="field?.aggregation === 'none' || field?.aggregation === null"
               :class="{
-                  'group-hover:opacity-100': ![UITypes.SpecificDBType, UITypes.ForeignKey, UITypes.Button].includes(column?.uidt!)
-                }"
+                'group-hover:opacity-100': !isLocked,
+              }"
               class="text-gray-500 opacity-0 transition"
             >
               <GeneralIcon class="text-gray-500" icon="arrowDown" />
@@ -275,7 +301,15 @@ const renderAltOrOptlKey = () => {
                 </span>
 
                 <span class="text-gray-600 font-semibold text-[12px]">
-                  {{ formatAggregation(field.aggregation, value, column) }}
+                  {{
+                    getFormattedAggrationValue(field.aggregation, value, column, [], {
+                      meta,
+                      metas,
+                      isMysql,
+                      isPg,
+                      col: column,
+                    })
+                  }}
                 </span>
               </div>
 
@@ -286,7 +320,15 @@ const renderAltOrOptlKey = () => {
                   </span>
 
                   <span class="font-semibold text-[12px]">
-                    {{ formatAggregation(field.aggregation, value, column) }}
+                    {{
+                      getFormattedAggrationValue(field.aggregation, value, column, [], {
+                        meta,
+                        metas,
+                        isMysql,
+                        isPg,
+                        col: column,
+                      })
+                    }}
                   </span>
                 </div>
               </template>
@@ -295,7 +337,7 @@ const renderAltOrOptlKey = () => {
         </div>
 
         <template #overlay>
-          <NcMenu>
+          <NcMenu variant="small">
             <NcMenuItem v-for="(agg, i) in getAggregations(column)" :key="i" @click="updateAggregate(column.id, agg)">
               <div class="flex !w-full text-[13px] text-gray-800 items-center justify-between">
                 {{ $t(`aggregation_type.${agg}`) }}

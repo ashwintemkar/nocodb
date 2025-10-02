@@ -161,7 +161,7 @@ export interface NcContext {
 
 selectors.setTestIdAttribute('data-testid');
 const sqliteFilePath = (workerId: string) => {
-  const rootDir = process.cwd();
+  const rootDir = `${__dirname}/..`;
   return `${rootDir}/../../packages/nocodb/test_sakila_${workerId}.db`;
 };
 
@@ -312,7 +312,7 @@ async function localInit({
         await fs.unlink(sqliteFilePath(parallelId));
       }
       if (!isEmptyProject) {
-        const testsDir = path.join(process.cwd(), '../../packages/nocodb/tests');
+        const testsDir = path.join(__dirname, '../../../packages/nocodb/tests');
         await fs.copyFile(`${testsDir}/sqlite-sakila-db/sakila.db`, sqliteFilePath(parallelId));
       }
     } else if (dbType === 'mysql') {
@@ -483,15 +483,15 @@ const setup = async ({
   // default landing page for tests
   let baseUrl;
   if (isEE()) {
-    switch (base.type) {
+    const baseType = base.type || ProjectTypes.DATABASE;
+
+    switch (baseType) {
       case ProjectTypes.DOCUMENTATION:
         baseUrl = url ? url : `/#/${base.fk_workspace_id}/${base.id}/doc`;
         break;
       case ProjectTypes.DATABASE:
         baseUrl = url ? url : `/#/${base.fk_workspace_id}/${base.id}`;
         break;
-      default:
-        throw new Error(`Unknown base type: ${base.type}`);
     }
   } else {
     // sample: http://localhost:3000/#/ws/default/base/pdknlfoc5e7bx4w
@@ -503,6 +503,9 @@ const setup = async ({
   await page.goto(baseUrl, {
     waitUntil: 'networkidle',
   });
+
+  // Wait for the sidebar slide transition to complete to avoid flaky tests
+  await page.waitForTimeout(500);
 
   console.timeEnd('Setup');
 
@@ -526,7 +529,7 @@ export const unsetup = async (context: NcContext): Promise<void> => {};
 // packages/nocodb/src/lib/services/test/TestResetService/resetPgSakilaProject.ts
 
 const resetSakilaMysql = async (knex: Knex, parallelId: string, isEmptyProject: boolean) => {
-  const testsDir = path.join(process.cwd(), '/../../packages/nocodb/tests');
+  const testsDir = path.join(__dirname, '../../../packages/nocodb/tests');
 
   try {
     await knex.raw(`DROP DATABASE test_sakila_${parallelId}`);

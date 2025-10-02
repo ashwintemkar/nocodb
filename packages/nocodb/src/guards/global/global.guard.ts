@@ -5,6 +5,7 @@ import { extractRolesObj } from 'nocodb-sdk';
 import type { Request } from 'express';
 import type { ExecutionContext } from '@nestjs/common';
 import { JwtStrategy } from '~/strategies/jwt.strategy';
+import { getApiTokenFromHeader } from '~/helpers';
 
 @Injectable()
 export class GlobalGuard extends AuthGuard(['jwt']) {
@@ -20,6 +21,13 @@ export class GlobalGuard extends AuthGuard(['jwt']) {
     if (req.headers?.['xc-auth']) {
       try {
         result = await this.extractBoolVal(super.canActivate(context));
+        if (result && req.context) {
+          req.context.user = {
+            id: req.user.id,
+            email: req.user.email,
+            email_verified: req.user.email_verified,
+          };
+        }
       } catch (e) {
         console.log(e);
       }
@@ -41,7 +49,7 @@ export class GlobalGuard extends AuthGuard(['jwt']) {
 
     if (result) return true;
 
-    if (req.headers['xc-token']) {
+    if (getApiTokenFromHeader(req)) {
       let canActivate = false;
       try {
         const guard = new (AuthGuard('authtoken'))(context);
@@ -85,6 +93,14 @@ export class GlobalGuard extends AuthGuard(['jwt']) {
   ): Promise<any> {
     const u = await this.jwtStrategy.validate(req, user);
     req.user = u;
+
+    if (req.context) {
+      req.context.user = {
+        id: req.user.id,
+        email: req.user.email,
+        email_verified: req.user.email_verified,
+      };
+    }
     return true;
   }
 

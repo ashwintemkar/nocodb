@@ -25,7 +25,7 @@ export const createThumbnail = async (file: File): Promise<string | null> => {
         }
         img.onerror = function () {
           console.error('Error loading image')
-          reject(null)
+          reject(new Error('Error loading image'))
         }
         img.src = thumbnailURL
       } else if (file.type.startsWith('video/')) {
@@ -52,7 +52,7 @@ export const createThumbnail = async (file: File): Promise<string | null> => {
         }
         video.onerror = function () {
           console.error('Error loading video')
-          reject(null)
+          reject(new Error('Error loading video'))
         }
         video.src = thumbnailURL
       } else {
@@ -62,7 +62,7 @@ export const createThumbnail = async (file: File): Promise<string | null> => {
 
     reader.onerror = function () {
       console.error('Error reading file')
-      reject(null)
+      reject(new Error('Error reading file'))
     }
 
     reader.readAsDataURL(file)
@@ -91,4 +91,25 @@ export async function isURLExpired(url?: string) {
       error: error.message,
     }
   }
+}
+
+export function formatFileSize(bytes?: number, decimals = 2): string {
+  if (!ncIsNumber(bytes) || !bytes) return '0 Bytes'
+
+  const k = 1024
+  const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+
+  const size = parseFloat((bytes / k ** i).toFixed(decimals))
+
+  return `${size} ${sizes[i]}`
+}
+
+export function getReadableFileType(mimeType?: string): string {
+  if (!mimeType || !ncIsString(mimeType)) return ''
+
+  const parts = mimeType.split('/')
+  const subtype = parts[1] || ''
+
+  return subtype.toUpperCase()
 }

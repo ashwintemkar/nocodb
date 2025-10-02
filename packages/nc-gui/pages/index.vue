@@ -4,13 +4,9 @@ definePageMeta({
   hasSidebar: true,
 })
 
-const dialogOpen = ref(false)
+const { showOnboardingFlow } = useOnboardingFlow()
 
-const openDialogKey = ref<string>('')
-
-const dataSourcesState = ref<string>('')
-
-const baseId = ref<string>()
+const { isSharedBase, isSharedErd } = storeToRefs(useBase())
 
 const basesStore = useBases()
 
@@ -32,23 +28,23 @@ const autoNavigateToProject = async () => {
     return
   }
 
-  await basesStore.navigateToProject({ baseId: basesList.value[0].id! })
+  const lastVisitedBase = ncLastVisitedBase().get()
+
+  const firstBase = lastVisitedBase
+    ? basesStore.basesList.find((b) => b.id === lastVisitedBase) ?? basesStore.basesList[0]
+    : basesStore.basesList[0]
+
+  if (!firstBase?.id) return
+
+  await basesStore.navigateToProject({ baseId: firstBase.id!, query: extractAiBaseCreateQueryParams(route.value.query) })
 }
 
 const isSharedView = computed(() => {
-  const routeName = (route.value.name as string) || ''
-
-  // check route is not base page by route name
-  return (
-    !routeName.startsWith('index-typeOrId-baseId-') &&
-    !['index', 'index-typeOrId', 'index-typeOrId-feed', 'index-typeOrId-integrations'].includes(routeName)
-  )
+  return isSharedViewRoute(route.value)
 })
 
 const isSharedFormView = computed(() => {
-  const routeName = (route.value.name as string) || ''
-  // check route is shared form view route
-  return routeName.startsWith('index-typeOrId-form-viewId')
+  return isSharedFormViewRoute(route.value)
 })
 
 const { sharedBaseId } = useCopySharedBase()
@@ -56,6 +52,11 @@ const { sharedBaseId } = useCopySharedBase()
 const isDuplicateDlgOpen = ref(false)
 
 async function handleRouteTypeIdChange() {
+  // Avoid loading bases if onboarding flow is shown
+  if (showOnboardingFlow.value) {
+    return
+  }
+
   // avoid loading bases for shared views
   if (isSharedView.value) {
     return
@@ -80,12 +81,9 @@ async function handleRouteTypeIdChange() {
   }
 }
 
-watch(
-  () => route.value.params.typeOrId,
-  () => {
-    handleRouteTypeIdChange()
-  },
-)
+watch([() => route.value.params.typeOrId, () => showOnboardingFlow.value], () => {
+  handleRouteTypeIdChange()
+})
 
 // onMounted is needed instead having this function called through
 // immediate watch, because if route is changed during page transition
@@ -102,19 +100,23 @@ onMounted(() => {
   })
 })
 
-function toggleDialog(value?: boolean, key?: string, dsState?: string, pId?: string) {
-  dialogOpen.value = value ?? !dialogOpen.value
-  openDialogKey.value = key || ''
-  dataSourcesState.value = dsState || ''
-  baseId.value = pId || ''
-}
-
-provide(ToggleDialogInj, toggleDialog)
+watch(
+  [() => isSharedFormView.value, () => isSharedView.value, () => isSharedBase.value, () => isSharedErd.value],
+  (arr) => {
+    addConfirmPageLeavingRedirectToWindow(!arr.some(Boolean))
+  },
+  {
+    immediate: true,
+  },
+)
 </script>
 
 <template>
   <div>
-    <NuxtLayout v-if="isSharedFormView">
+    <NuxtLayout v-if="showOnboardingFlow" name="empty">
+      <AuthOnboarding />
+    </NuxtLayout>
+    <NuxtLayout v-else-if="isSharedFormView">
       <NuxtPage />
     </NuxtLayout>
     <NuxtLayout v-else-if="isSharedView" name="shared-view">
@@ -128,12 +130,6 @@ provide(ToggleDialogInj, toggleDialog)
         <NuxtPage />
       </template>
     </NuxtLayout>
-    <LazyDashboardSettingsModal
-      v-model:model-value="dialogOpen"
-      v-model:open-key="openDialogKey"
-      v-model:data-sources-state="dataSourcesState"
-      :base-id="baseId"
-    />
     <DlgSharedBaseDuplicate v-if="isUIAllowed('baseDuplicate')" v-model="isDuplicateDlgOpen" />
   </div>
 </template>

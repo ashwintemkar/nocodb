@@ -1,12 +1,11 @@
 import type { ComputedRef, Ref, ToRefs } from 'vue'
 import type { WritableComputedRef } from '@vue/reactivity'
 import type { JwtPayload } from 'jwt-decode'
-import type { ProjectRoles } from 'nocodb-sdk'
 import type { AxiosInstance } from 'axios'
-import type { NcProjectType } from '#imports'
 export interface AppInfo {
   ncSiteUrl: string
   authType: 'jwt' | 'none'
+  allowLocalUrl: boolean
   connectToExternalDB: boolean
   defaultLimit: number
   defaultGroupByLimit: {
@@ -14,6 +13,7 @@ export interface AppInfo {
     limitRecord: number
   }
   firstUser: boolean
+  env: string
   githubAuthEnabled: boolean
   googleAuthEnabled: boolean
   oidcAuthEnabled: boolean
@@ -41,6 +41,13 @@ export interface AppInfo {
   giftUrl: string
   feedEnabled: boolean
   sentryDSN: string
+  isOnPrem: boolean
+  stripePublishableKey?: string
+  marketingRootUrl?: string
+  openReplayKey?: string | null
+  disableSupportChat: boolean
+  disableOnboardingFlow: boolean
+  iframeWhitelistDomains?: Array<string>
 }
 
 export interface StoredState {
@@ -48,7 +55,6 @@ export interface StoredState {
   lang: keyof typeof Language
   darkMode: boolean
   filterAutoSave: boolean
-  previewAs: ProjectRoles | null
   includeM2M: boolean
   showNull: boolean
   currentVersion: string | null
@@ -64,6 +70,7 @@ export interface StoredState {
   isAddNewRecordGridMode: boolean
   syncDataUpvotes: string[]
   giftBannerDismissedCount: number
+  isLeftSidebarOpen: boolean
 }
 
 export type State = ToRefs<Omit<StoredState, 'token'>> & {
@@ -99,14 +106,24 @@ export interface Actions {
   }) => Promise<string | null | void>
   loadAppInfo: () => void
   setIsMobileMode: (isMobileMode: boolean) => void
-  navigateToProject: (params: { workspaceId?: string; baseId?: string; type?: NcProjectType; query?: any }) => void
+  navigateToProject: (params: { workspaceId?: string; baseId?: string; query?: any }) => void
+  /**
+   * params `tableTitle, viewTitle, automationTitle,dashboardTitle` will be used for readable url slug
+   */
   ncNavigateTo: (params: {
     workspaceId?: string
     baseId?: string
-    type?: NcProjectType
     query?: any
     tableId?: string
+    tableTitle?: string
     viewId?: string
+    viewTitle?: string
+    automationId?: string
+    automationTitle?: string
+    replace?: boolean
+    dashboardId?: string
+    dashboardTitle?: string
+    newTab?: boolean
   }) => void
   getBaseUrl: (workspaceId: string) => string | undefined
   getMainUrl: (workspaceId: string) => string | undefined

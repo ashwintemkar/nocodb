@@ -8,6 +8,8 @@ const emits = defineEmits<{
 
 const { isLoading, startCamera: _startCamera, stopCamera: _stopCamera, videoStream, permissionGranted } = useAttachmentCell()!
 
+const { isMobileMode } = useGlobal()
+
 const capturedImage = ref<null | File>(null)
 const videoRef = ref<HTMLVideoElement | undefined>()
 const canvasRef = ref<HTMLCanvasElement | undefined>()
@@ -71,7 +73,7 @@ onBeforeUnmount(() => {
 <template>
   <div class="w-full relative h-full">
     <NcTooltip class="absolute top-3 right-2">
-      <NcButton type="text" class="!border-0" size="xsmall" @click="closeMenu">
+      <NcButton type="text" class="!border-0" :size="isMobileMode ? 'small' : 'xsmall'" @click="closeMenu">
         <GeneralIcon icon="close" />
       </NcButton>
 
@@ -98,16 +100,16 @@ onBeforeUnmount(() => {
       }"
       class="w-full gap-3 h-full flex-col flex items-center justify-between"
     >
-      <div v-show="!capturedImage" class="w-full gap-3 h-full flex-col flex items-center justify-between">
-        <video ref="videoRef" class="rounded-md" style="width: 400px" autoplay></video>
+      <div v-show="!capturedImage" class="w-full gap-3 h-full flex-col flex items-center justify-between border border-red-500">
+        <video ref="videoRef" class="rounded-md w-full aspect-video max-w-md flex-1 object-contain" autoplay></video>
 
         <NcButton class="!rounded-full !px-0" @click="captureImage">
           <mdi-camera class="text-xl" />
         </NcButton>
       </div>
 
-      <div v-show="capturedImage" class="flex group flex-col gap-1">
-        <canvas ref="canvasRef" class="rounded-md" style="width: 400px; display: none"></canvas>
+      <div v-show="capturedImage" class="flex group flex-col">
+        <canvas ref="canvasRef" class="mb-2 rounded-md w-full aspect-video max-w-md flex-1 object-contain"></canvas>
 
         <div class="relative text-[12px] font-semibold text-gray-800 flex">
           <div class="flex-auto truncate line-height-4">

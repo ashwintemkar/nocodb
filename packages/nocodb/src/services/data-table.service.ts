@@ -1,15 +1,22 @@
 import { Injectable } from '@nestjs/common';
-import { isLinksOrLTAR, RelationTypes, ViewTypes } from 'nocodb-sdk';
+import {
+  isLinksOrLTAR,
+  ncIsNumber,
+  RelationTypes,
+  ViewTypes,
+} from 'nocodb-sdk';
 import { validatePayload } from 'src/helpers';
+import type { NcApiVersion } from 'nocodb-sdk';
 import type { LinkToAnotherRecordColumn } from '~/models';
 import type { NcContext } from '~/interface/config';
-import { nocoExecute } from '~/utils';
 import { Column, Model, Source, View } from '~/models';
+import { nocoExecute, processConcurrently } from '~/utils';
 import { DatasService } from '~/services/datas.service';
 import { NcError } from '~/helpers/catchError';
 import getAst from '~/helpers/getAst';
 import { PagedResponseImpl } from '~/helpers/PagedResponse';
 import NcConnectionMgrv2 from '~/utils/common/NcConnectionMgrv2';
+import { dataWrapper } from '~/helpers/dbHelpers';
 
 @Injectable()
 export class DataTableService {
@@ -23,6 +30,8 @@ export class DataTableService {
       query: any;
       viewId?: string;
       ignorePagination?: boolean;
+      apiVersion?: NcApiVersion;
+      includeSortAndFilterColumns?: boolean;
     },
   ) {
     const { modelId, viewId, baseId, ...rest } = param;
@@ -31,7 +40,13 @@ export class DataTableService {
       viewId,
       baseId,
     });
-    return await this.datasService.dataList(context, { ...rest, model, view });
+    return await this.datasService.dataList(context, {
+      ...rest,
+      model,
+      view,
+      apiVersion: param.apiVersion,
+      includeSortAndFilterColumns: param?.includeSortAndFilterColumns,
+    });
   }
 
   async dataRead(
@@ -42,6 +57,7 @@ export class DataTableService {
       rowId: string;
       viewId?: string;
       query: any;
+      apiVersion?: NcApiVersion;
     },
   ) {
     const { model, view } = await this.getModelAndView(context, param);
@@ -57,6 +73,7 @@ export class DataTableService {
 
     const row = await baseModel.readByPk(param.rowId, false, param.query, {
       throwErrorIfInvalidParams: true,
+      apiVersion: param.apiVersion,
     });
 
     if (!row) {
@@ -86,7 +103,7 @@ export class DataTableService {
       source,
     });
 
-    if (view.type !== ViewTypes.GRID) {
+    if (view && view.type !== ViewTypes.GRID) {
       NcError.badRequest('Aggregation is only supported on grid views');
     }
 
@@ -113,6 +130,12 @@ export class DataTableService {
       modelId: string;
       body: any;
       cookie: any;
+      undo?: boolean;
+      apiVersion?: NcApiVersion;
+      internalFlags?: {
+        allowSystemColumn?: boolean;
+        skipHooks?: boolean;
+      };
     },
   ) {
     const { model, view } = await this.getModelAndView(context, param);
@@ -131,10 +154,44 @@ export class DataTableService {
         cookie: param.cookie,
         insertOneByOneAsFallback: true,
         isSingleRecordInsertion: !Array.isArray(param.body),
+        typecast: (param.cookie?.query?.typecast ?? '') === 'true',
+        undo: param.undo,
+        apiVersion: param.apiVersion,
+        allowSystemColumn: param.internalFlags?.allowSystemColumn,
+        skip_hooks: param.internalFlags?.skipHooks,
       },
     );
 
     return Array.isArray(param.body) ? result : result[0];
+  }
+
+  async dataMove(
+    context: NcContext,
+    param: {
+      baseId?: string;
+      modelId: string;
+      rowId: string;
+      cookie: any;
+      beforeRowId?: string;
+    },
+  ) {
+    const { model, view } = await this.getModelAndView(context, param);
+
+    const source = await Source.get(context, model.source_id);
+
+    const baseModel = await Model.getBaseModelSQL(context, {
+      id: model.id,
+      viewId: view?.id,
+      dbDriver: await NcConnectionMgrv2.get(source),
+    });
+
+    await baseModel.moveRecord({
+      cookie: param.cookie,
+      rowId: param.rowId,
+      beforeRowId: param.beforeRowId,
+    });
+
+    return true;
   }
 
   async dataUpdate(
@@ -146,6 +203,11 @@ export class DataTableService {
       // rowId: string;
       body: any;
       cookie: any;
+      apiVersion?: NcApiVersion;
+      internalFlags?: {
+        allowSystemColumn?: boolean;
+        skipHooks?: boolean;
+      };
     },
   ) {
     const { model, view } = await this.getModelAndView(context, param);
@@ -165,7 +227,11 @@ export class DataTableService {
       {
         cookie: param.cookie,
         throwExceptionIfNotExist: true,
+        typecast: (param.cookie?.query?.typecast ?? '') === 'true',
         isSingleRecordUpdation: !Array.isArray(param.body),
+        apiVersion: param.apiVersion,
+        allowSystemColumn: param.internalFlags?.allowSystemColumn,
+        skip_hooks: param.internalFlags?.skipHooks,
       },
     );
 
@@ -213,6 +279,7 @@ export class DataTableService {
       viewId?: string;
       modelId: string;
       query: any;
+      apiVersion?: NcApiVersion;
     },
   ) {
     const { model, view } = await this.getModelAndView(context, param);
@@ -235,7 +302,7 @@ export class DataTableService {
     return { count };
   }
 
-  protected async getModelAndView(
+  async getModelAndView(
     context: NcContext,
     param: {
       baseId?: string;
@@ -244,9 +311,8 @@ export class DataTableService {
     },
   ) {
     const model = await Model.get(context, param.modelId);
-
     if (!model) {
-      NcError.tableNotFound(param.modelId);
+      NcError.get(context).tableNotFound(param.modelId);
     }
 
     if (param.baseId && model.base_id !== param.baseId) {
@@ -258,7 +324,7 @@ export class DataTableService {
     if (param.viewId) {
       view = await View.get(context, param.viewId);
       if (!view || (view.fk_model_id && view.fk_model_id !== param.modelId)) {
-        NcError.viewNotFound(param.viewId);
+        NcError.get(context).viewNotFound(param.viewId);
       }
     }
 
@@ -281,7 +347,7 @@ export class DataTableService {
 
     const result = (Array.isArray(body) ? body : [body]).map((row) => {
       return pkColumns.reduce((acc, col) => {
-        acc[col.title] = row[col.title] ?? row[col.column_name];
+        acc[col.title] = row[col.title] ?? row[col.column_name] ?? row[col.id];
         return acc;
       }, {});
     });
@@ -309,14 +375,19 @@ export class DataTableService {
 
     for (const row of rows) {
       let pk;
+      // TODO: refactor to extractPkValues of baseModelSqlV2
+
       // if only one primary key then extract the value
       if (model.primaryKeys.length === 1)
-        pk = row[model.primaryKey.title] ?? row[model.primaryKey.column_name];
+        pk =
+          row[model.primaryKey.title] ??
+          row[model.primaryKey.column_name] ??
+          row[model.primaryKey.id];
       // if composite primary key then join the values with ___
       else
         pk = model.primaryKeys
           .map((pk) =>
-            (row[pk.title] ?? row[pk.column_name])
+            (row[pk.title] ?? row[pk.column_name] ?? row[pk.id])
               ?.toString?.()
               ?.replaceAll('_', '\\_'),
           )
@@ -341,6 +412,7 @@ export class DataTableService {
       query: any;
       rowId: string | string[] | number | number[];
       columnId: string;
+      apiVersion?: NcApiVersion;
     },
   ) {
     const { model, view } = await this.getModelAndView(context, param);
@@ -377,7 +449,12 @@ export class DataTableService {
     try {
       listArgs.sortArr = JSON.parse(listArgs.sortArrJson);
     } catch (e) {}
-
+    if (
+      ncIsNumber(Number(param.query.limit)) &&
+      Number(param.query.limit) > 0
+    ) {
+      listArgs.nestedLimit = param.query.limit;
+    }
     let data: any[];
     let count: number;
     if (colOptions.type === RelationTypes.MANY_TO_MANY) {
@@ -385,6 +462,7 @@ export class DataTableService {
         {
           colId: column.id,
           parentId: param.rowId,
+          apiVersion: param.apiVersion,
         },
         listArgs as any,
       );
@@ -400,6 +478,7 @@ export class DataTableService {
         {
           colId: column.id,
           id: param.rowId,
+          apiVersion: param.apiVersion,
         },
         listArgs as any,
       );
@@ -410,11 +489,24 @@ export class DataTableService {
         },
         param.query,
       )) as number;
+    } else if (
+      colOptions.type !== RelationTypes.BELONGS_TO &&
+      !column.meta?.bt
+    ) {
+      data = await baseModel.ooRead(
+        {
+          colId: column.id,
+          id: param.rowId,
+          apiVersion: param.apiVersion,
+        },
+        param.query as any,
+      );
     } else {
       data = await baseModel.btRead(
         {
           colId: column.id,
           id: param.rowId,
+          apiVersion: param.apiVersion,
         },
         param.query as any,
       );
@@ -612,12 +704,15 @@ export class DataTableService {
     const colOptions = await column.getColOptions<LinkToAnotherRecordColumn>(
       context,
     );
-    const relatedModel = await colOptions.getRelatedTable(context);
-    await relatedModel.getColumns(context);
+
+    const { refContext } = await colOptions.getParentChildContext(context);
+
+    const relatedModel = await colOptions.getRelatedTable(refContext);
+    await relatedModel.getColumns(refContext);
 
     if (colOptions.type !== RelationTypes.MANY_TO_MANY) return;
 
-    const { dependencyFields } = await getAst(context, {
+    const { dependencyFields } = await getAst(refContext, {
       model: relatedModel,
       query: param.query,
       extractOnlyPrimaries: !(param.query?.f || param.query?.fields),
@@ -646,7 +741,9 @@ export class DataTableService {
       if (deleteCellNestedList && Array.isArray(deleteCellNestedList)) {
         await baseModel.removeLinks({
           colId: column.id,
-          childIds: deleteCellNestedList,
+          childIds: deleteCellNestedList.map((nestedList) =>
+            dataWrapper(nestedList).extractPksValue(relatedModel),
+          ),
           rowId: operationMap.deleteAll.rowId,
           cookie: param.cookie,
         });
@@ -687,13 +784,13 @@ export class DataTableService {
       const filteredRowsToLink = this.filterAndMapRows(
         copiedCellNestedList,
         pasteCellNestedList,
-        relatedModel.primaryKeys,
+        relatedModel,
       );
 
       const filteredRowsToUnlink = this.filterAndMapRows(
         pasteCellNestedList,
         copiedCellNestedList,
-        relatedModel.primaryKeys,
+        relatedModel,
       );
 
       await Promise.all([
@@ -740,13 +837,13 @@ export class DataTableService {
   private filterAndMapRows(
     sourceList: Record<string, any>[],
     targetList: Record<string, any>[],
-    primaryKeys: Column<any>[],
-  ): Record<string, any>[] {
+    relatedModel: Model,
+  ): (string | number)[] {
     return sourceList
       .filter(
         (sourceRow: Record<string, any>) =>
           !targetList.some((targetRow: Record<string, any>) =>
-            primaryKeys.every(
+            relatedModel.primaryKeys.every(
               (key) =>
                 sourceRow[key.title || key.column_name] ===
                 targetRow[key.title || key.column_name],
@@ -754,11 +851,7 @@ export class DataTableService {
           ),
       )
       .map((item: Record<string, any>) =>
-        primaryKeys.reduce((acc, key) => {
-          acc[key.title || key.column_name] =
-            item[key.title || key.column_name];
-          return acc;
-        }, {} as Record<string, any>),
+        dataWrapper(item).extractPksValue(relatedModel, true),
       );
   }
 
@@ -784,23 +877,23 @@ export class DataTableService {
       NcError.badRequest('Invalid bulkFilterList');
     }
 
-    const dataListResults = await bulkFilterList.reduce(
-      async (accPromise, dF: any) => {
-        const acc = await accPromise;
-        const result = await this.datasService.dataList(context, {
-          query: {
-            ...dF,
-          },
+    const results = await processConcurrently(
+      bulkFilterList,
+      async (dF: any) => {
+        const data = await this.datasService.dataList(context, {
+          query: { ...dF },
           model,
           view,
         });
-        acc[dF.alias] = result;
-        return acc;
+        return { alias: dF.alias, data };
       },
-      Promise.resolve({}),
+      5,
     );
 
-    return dataListResults;
+    return results.reduce((acc, { alias, data }) => {
+      acc[alias] = data;
+      return acc;
+    }, {});
   }
 
   async bulkGroupBy(

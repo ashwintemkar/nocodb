@@ -19,7 +19,7 @@ on:
         required: true
 jobs:
   build-executables:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v3
       - name: Get pnpm store directory
@@ -63,6 +63,7 @@ jobs:
 
       - uses: actions/setup-node@v3
         with:
+          # pkg library doesn't have node 22 support
           node-version: 18.19.1
 
       - name : Install nocodb, other dependencies and build executables
@@ -91,7 +92,7 @@ jobs:
           ./node_modules/.bin/node-pre-gyp install --directory=./node_modules/sqlite3 --target_platform=linux --fallback-to-build --target_arch=arm64 --target_libc=musl
 
           # clean up code to optimize size
-          npx modclean --patterns="default:*" --ignore="nc-lib-gui/**,nocodb/**,dayjs/**,express-status-monitor/**,sqlite3/**" --run
+          npx modclean --patterns="default:*" --ignore="nc-lib-gui/**,nocodb/**,dayjs/**,express-status-monitor/**,sqlite3/**,jsdom/**" --run
           
           mkdir ./mac-dist
           mkdir ./dist
@@ -177,7 +178,7 @@ jobs:
 
   publish-mac-executables-and-homebrew:
     needs: [sign-mac-executables,build-executables]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/download-artifact@master
         with:

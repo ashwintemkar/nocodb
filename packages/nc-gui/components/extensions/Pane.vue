@@ -14,6 +14,7 @@ const {
   extensionPanelSize,
   updateExtension,
   eventBus,
+  toggleExtensionPanel,
 } = useExtensions()
 
 const { $e } = useNuxtApp()
@@ -59,6 +60,7 @@ const filteredExtensionList = computed(() =>
 )
 
 const toggleMarket = () => {
+  $e('c:extensions:marketplace:open')
   isMarketVisible.value = !isMarketVisible.value
 }
 
@@ -104,6 +106,7 @@ defineExpose({
   onReady: () => {
     isReady.value = true
   },
+  isReady,
 })
 
 watch(isPanelExpanded, (newValue) => {
@@ -162,19 +165,27 @@ onMounted(() => {
     "
   >
     <Transition name="layout" :duration="150">
-      <div v-if="isPanelExpanded" class="flex flex-col h-full">
+      <div v-show="isPanelExpanded" class="flex flex-col h-full">
         <div
           ref="extensionHeaderRef"
           class="h-[var(--toolbar-height)] flex items-center gap-3 px-4 py-2 border-b-1 border-gray-200 bg-white"
         >
           <div
-            class="flex items-center gap-3 font-weight-700 text-gray-700 text-base"
+            class="flex"
             :class="{
               'flex-1': !isOpenSearchBox,
             }"
           >
-            <GeneralIcon icon="ncPuzzleSolid" class="h-5 w-5 text-gray-700 opacity-85" />
-            <span v-if="!isOpenSearchBox || width >= 507">{{ $t('general.extensions') }}</span>
+            <NcTooltip :title="$t('title.hideExtensions')" hide-on-click>
+              <div
+                v-e="['c:extension-toggle']"
+                class="flex items-center gap-3 font-weight-700 text-gray-700 text-base cursor-pointer"
+                @click="toggleExtensionPanel"
+              >
+                <GeneralIcon icon="ncPuzzleSolid" class="h-5 w-5 text-gray-700 opacity-85" />
+                <span v-if="!isOpenSearchBox || width >= 507">{{ $t('general.extensions') }}</span>
+              </div>
+            </NcTooltip>
           </div>
           <div
             class="flex justify-end"
@@ -235,6 +246,7 @@ onMounted(() => {
         <template v-else>
           <Draggable
             :model-value="filteredExtensionList"
+            v-bind="getDraggableAutoScrollOptions({ scrollSensitivity: 100 })"
             draggable=".nc-extension-item"
             item-key="id"
             handle=".nc-extension-drag-handler"

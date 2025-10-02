@@ -23,7 +23,7 @@ test.describe('Shared base', () => {
     //   mode: 'shareBase',
     // });
 
-    await dashboard.treeView.openTable({ title: 'Country', mode: 'shareBase' });
+    await dashboard.treeView.openTable({ title: 'Country', mode: 'shareBase', baseTitle: context.base.title });
 
     await dashboard.viewSidebar.validateRoleAccess({
       role: role.toLowerCase(),
@@ -62,9 +62,6 @@ test.describe('Shared base', () => {
   });
 
   test('#1', async () => {
-    // close 'Team & Auth' tab
-    await dashboard.closeTab({ title: 'Team & Auth' });
-
     let url = '';
     // share button visible only if a table is opened
     await dashboard.treeView.openTable({ title: 'Country' });

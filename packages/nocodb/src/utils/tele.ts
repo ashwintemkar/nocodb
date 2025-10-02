@@ -6,9 +6,10 @@ import isDocker from 'is-docker';
 import { packageVersion } from '~/utils/packageVersion';
 import TeleBatchProcessor from '~/utils/TeleBatchProcessor';
 import { isEE } from '~/utils';
+import { getRedisURL } from '~/helpers/redisHelpers';
 
 const isDisabled = !!process.env.NC_DISABLE_TELE;
-const cache = !!process.env.NC_REDIS_URL;
+const cache = !!getRedisURL();
 const executable = !!process.env.NC_BINARY_BUILD;
 const litestream = !!(
   process.env.LITESTREAM_S3_BUCKET &&
@@ -29,7 +30,7 @@ const sendEvt = () => {
     });
   } catch {}
 };
-setInterval(sendEvt, 8 * 60 * 60 * 1000);
+setInterval(sendEvt, 8 * 60 * 60 * 1000).unref();
 
 class Tele {
   static emitter;
@@ -147,7 +148,6 @@ class Tele {
               procedure_count: data.proceduresCount || 0,
               mysql: data.dbType === 'mysql2' ? 1 : 0,
               pg: data.dbType === 'pg' ? 1 : 0,
-              mssql: data.dbType === 'mssql' ? 1 : 0,
               sqlite3: data.dbType === 'sqlite3' ? 1 : 0,
               oracledb: data.dbType === 'oracledb' ? 1 : 0,
               rest: data.type === 'rest' ? 1 : 0,
@@ -303,7 +303,7 @@ if (process.env.NC_PUBLIC_URL) {
     })
       .then(() => {})
       .catch(() => {});
-  }, 2 * 60 * 60 * 1000);
+  }, 2 * 60 * 60 * 1000).unref();
 }
 
 if (process.env.NC_ONE_CLICK) {

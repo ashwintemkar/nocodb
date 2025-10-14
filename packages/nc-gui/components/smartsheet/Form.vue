@@ -91,7 +91,7 @@ const {
   checkFieldVisibility,
 } = useProvideFormViewStore(meta, view, formViewData, updateFormView, isEditable)
 
-const { isSyncedTable } = useSmartsheetStoreOrThrow()
+const { isSyncedTable, eventBus } = useSmartsheetStoreOrThrow()
 
 const { preFillFormSearchParams } = storeToRefs(useViewsStore())
 
@@ -110,6 +110,12 @@ reloadEventHook.on(
     }
   }),
 )
+
+eventBus.on((event) => {
+  if (event === SmartsheetStoreEvents.COPIED_VIEW_CONFIG) {
+    reloadEventHook.trigger()
+  }
+})
 
 const { fields, showAll, hideAll } = useViewColumnsOrThrow()
 
@@ -956,7 +962,7 @@ const { message: templatedMessage } = useTemplatedMessage(
                 </h1>
 
                 <div v-if="formViewData.subheading?.trim()">
-                  <LazyCellRichText
+                  <CellRichText
                     :value="formViewData.subheading"
                     class="font-medium text-base text-gray-500 !h-auto mb-4 -ml-1"
                     is-form-field
@@ -970,7 +976,7 @@ const { message: templatedMessage } = useTemplatedMessage(
                 <div class="w-full">
                   <a-alert class="nc-form-success-msg !my-4 !py-4 text-left !rounded-lg" type="success" outlined>
                     <template #message>
-                      <LazyCellRichText
+                      <CellRichText
                         v-if="templatedMessage"
                         :value="templatedMessage"
                         class="!h-auto -ml-1"
@@ -1097,7 +1103,7 @@ const { message: templatedMessage } = useTemplatedMessage(
                                     {{ formViewData.banner_image_url ? $t('general.replace') : $t('general.upload') }}
                                     {{ $t('general.banner') }}
                                   </span>
-                                  <LazyPaymentUpgradeBadge
+                                  <PaymentUpgradeBadge
                                     v-if="!isLocked"
                                     :feature="PlanFeatureTypes.FEATURE_FORM_CUSTOM_LOGO"
                                     :content="
@@ -1180,7 +1186,7 @@ const { message: templatedMessage } = useTemplatedMessage(
                             "
                             style="transition: all 0.3s ease-in"
                           >
-                            <LazyCellAttachmentPreviewImage
+                            <CellAttachmentPreviewImage
                               v-if="formViewData.logo_url"
                               :key="formViewData.logo_url?.path"
                               :srcs="getFormLogoSrc"
@@ -1215,7 +1221,7 @@ const { message: templatedMessage } = useTemplatedMessage(
                                         <span>
                                           {{ formViewData.logo_url ? $t('general.replace') : $t('general.upload') }} Logo</span
                                         >
-                                        <LazyPaymentUpgradeBadge
+                                        <PaymentUpgradeBadge
                                           v-if="!isLocked"
                                           :feature="PlanFeatureTypes.FEATURE_FORM_CUSTOM_LOGO"
                                           :content="
@@ -2159,7 +2165,7 @@ const { message: templatedMessage } = useTemplatedMessage(
       </div>
     </template>
     <div
-      v-if="!showBaseAccessRequestOverlay && (user?.base_roles?.viewer || user?.base_roles?.commenter)"
+      v-if="!showBaseAccessRequestOverlay && (user?.base_roles?.viewer || user?.base_roles?.commenter) && !isMobileMode"
       class="absolute inset-0 bg-black/40 z-500 grid place-items-center"
     >
       <div class="text-center bg-white px-6 py-8 rounded-xl max-w-lg">
@@ -2186,7 +2192,7 @@ const { message: templatedMessage } = useTemplatedMessage(
 .nc-input {
   @apply appearance-none w-full;
   &:not(.layout-list) {
-    &:not(.nc-cell-attachment) {
+    &:not(:has(.form-attachment-cell.nc-has-attachments)) {
       @apply !bg-white rounded-lg border-solid border-1 border-gray-200 !focus-within:border-brand-500;
     }
   }
